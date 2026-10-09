@@ -1,0 +1,15 @@
+{
+  "name": "webnovel-translator",
+  "version": "2.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch server.mjs",
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "@google/genai": "^1.20.0",
+    "@supabase/supabase-js": "^2.57.0",
+    "dotenv": "^16.4.7",
+    "express": "^5.1.0"
+  }
+}

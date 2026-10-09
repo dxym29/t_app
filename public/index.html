@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Webnovel Translator</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main class="wrap">
+  <header>
+    <h1>Webnovel Translator</h1>
+    <p>Gemini + Supabase • iPhone friendly</p>
+  </header>
+
+  <section class="card">
+    <label>Novel</label>
+    <div class="row">
+      <select id="novelSelect"></select>
+      <button id="newNovelBtn">New Novel</button>
+      <button id="deleteNovelBtn" class="danger">Delete</button>
+    </div>
+    <input id="novelName" placeholder="Novel name">
+    <textarea id="novelStyle" placeholder="Novel style / permanent translation rules"></textarea>
+    <button id="saveNovelBtn">Save Novel & Style</button>
+  </section>
+
+  <section class="card">
+    <div class="row">
+      <label class="grow">Episode
+        <select id="episodeSelect"></select>
+      </label>
+      <button id="newEpisodeBtn">New Episode</button>
+      <button id="deleteEpisodeBtn" class="danger">Delete</button>
+    </div>
+    <input id="episodeNumber" type="number" min="1" placeholder="Episode number">
+    <input id="episodeTitle" placeholder="Episode title">
+  </section>
+
+  <section class="card">
+    <label>Original</label>
+    <textarea id="source" class="big" placeholder="Paste the complete source chapter here..."></textarea>
+    <button id="translateBtn" class="primary">Translate</button>
+    <div id="status"></div>
+  </section>
+
+  <section class="card">
+    <label>Myanmar Translation</label>
+    <textarea id="translation" class="big"></textarea>
+    <div class="row">
+      <button id="copyBtn">Copy</button>
+      <button id="saveEpisodeBtn">Save Episode</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Glossary / Character Voice</h2>
+    <div class="grid">
+      <select id="termType">
+        <option value="characters">Character</option>
+        <option value="items">Item</option>
+        <option value="locations">Location</option>
+        <option value="organizations">Organization</option>
+        <option value="skills">Skill</option>
+        <option value="other">Other</option>
+      </select>
+      <input id="termOriginal" placeholder="Original">
+      <input id="termTranslation" placeholder="Established Myanmar name">
+      <input id="termNote" placeholder="Note">
+      <input id="termVoice" placeholder="Character voice (optional)">
+    </div>
+    <button id="addTermBtn">Add / Update</button>
+    <div id="glossary"></div>
+  </section>
+
+  <section class="card">
+    <h2>Backup / Move to a New Database</h2>
+    <p class="muted">Export a novel or all data before changing Supabase projects. Import works after the new database is initialized.</p>
+    <div class="row">
+      <button id="exportNovelBtn">Export Current Novel</button>
+      <button id="exportAllBtn">Export All</button>
+      <label class="fileBtn">Import Backup<input id="importFile" type="file" accept=".json" hidden></label>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Episodes</h2>
+    <div id="episodes"></div>
+  </section>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>
