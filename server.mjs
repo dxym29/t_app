@@ -12,7 +12,7 @@ app.use(express.static('public'));
 const ai=new GoogleGenAI({apiKey:process.env.GEMINI_API_KEY});
 const supabase=createClient(process.env.SUPABASE_URL,process.env.SUPABASE_SERVICE_ROLE_KEY,{auth:{persistSession:false}});
 const MODELS=['gemini-3.1-flash-lite','gemini-3.5-flash-lite'];
-const CHUNK_SIZES={'gemini-3.1-flash-lite':5000,'gemini-3.5-flash-lite':5000};
+const CHUNK_SIZES={'gemini-3.1-flash-lite':7000,'gemini-3.5-flash-lite':7000};
 const CONTEXT_OVERLAP=200;
 const MODEL_TIMEOUT=45000;
 const MAX_RETRIES_PER_MODEL=2;
@@ -26,16 +26,7 @@ function sleep(ms){return new Promise(resolve=>setTimeout(resolve,ms))}
 async function generateModel(prompt,model){
   const started=Date.now();
   console.log(`Trying model: ${model}`);
-  const response=await ai.models.generateContent({
-    model,
-    contents:prompt,
-    config:{
-      temperature:0.7,
-      maxOutputTokens:8192,
-      automaticContinuation:false,
-      httpOptions:{timeout:MODEL_TIMEOUT}
-    }
-  });
+  const response=await ai.models.generateContent({model,contents:prompt,config:{temperature:0.7,maxOutputTokens:8192,automaticContinuation:false,httpOptions:{timeout:MODEL_TIMEOUT}}});
   console.log(`SUCCESS: ${model} (${Date.now()-started}ms)`);
   return {text:response.text||'',model};
 }
@@ -51,24 +42,33 @@ async function generateWithRetries(prompt,model){
   }
   throw lastError;
 }
-function splitText(text,max){
-  const out=[]; let rest=text.trim();
-  while(rest){
-    if(rest.length<=max){out.push(rest);break}
-    let cut=rest.lastIndexOf('\n\n',max);
-    if(cut<Math.floor(max*0.55)) cut=rest.lastIndexOf('\n',max);
-    if(cut<Math.floor(max*0.55)) cut=rest.lastIndexOf(' ',max);
-    if(cut<Math.floor(max*0.55)) cut=max;
-    out.push(rest.slice(0,cut).trim());
-    rest=rest.slice(cut).trim();
+function splitText(text,maxChars=7000){
+  if(text.length<=maxChars)return [text];
+  const paragraphs=text.split(/\n\s*\n/);
+  const chunks=[];
+  let current='';
+  for(const p of paragraphs){
+    const block=p.trim();
+    if(!block)continue;
+    const candidate=current?current+'\n\n'+block:block;
+    if(candidate.length<=maxChars){
+      current=candidate;
+    }else{
+      if(current)chunks.push(current);
+      if(block.length<=maxChars){
+        current=block;
+      }else{
+        for(let i=0;i<block.length;i+=maxChars)chunks.push(block.slice(i,i+maxChars));
+        current='';
+      }
+    }
   }
-  return out.filter(Boolean);
+  if(current)chunks.push(current);
+  return chunks.filter(Boolean);
 }
 function glossaryText(g){
   const lines=[];
-  for(const [type,arr] of Object.entries(g||{})) for(const x of arr||[]){
-    lines.push(`${type}: ${x.original} => ${x.translation}${x.voice?` | voice: ${x.voice}`:''}${x.note?` | note: ${x.note}`:''}`);
-  }
+  for(const [type,arr] of Object.entries(g||{})) for(const x of arr||[])lines.push(`${type}: ${x.original} => ${x.translation}${x.voice?` | voice: ${x.voice}`:''}${x.note?` | note: ${x.note}`:''}`);
   return lines.join('\n')||'(none)';
 }
 function masterPrompt({style,glossary,source,previousTail,sourceContext}){
@@ -115,7 +115,7 @@ ${source}`;
 async function getGlossary(novelId){
   const rows=await q(supabase.from('glossary_terms').select('*').eq('novel_id',novelId).order('created_at'));
   const g={characters:[],items:[],locations:[],organizations:[],skills:[],other:[]};
-  for(const r of rows) (g[r.type]??g.other).push(r);
+  for(const r of rows)(g[r.type]??g.other).push(r);
   return g;
 }
 
@@ -124,14 +124,9 @@ app.get('/api/novels',async(_,res)=>{try{res.json(await q(supabase.from('novels'
 app.post('/api/novels',async(req,res)=>{try{const data=await q(supabase.from('novels').insert({name:req.body.name||'New Novel',style:req.body.style||''}).select().single());res.json(data)}catch(e){fail(res,e)}});
 app.put('/api/novels/:id',async(req,res)=>{try{const data=await q(supabase.from('novels').update({name:req.body.name,style:req.body.style,updated_at:new Date().toISOString()}).eq('id',req.params.id).select().single());res.json(data)}catch(e){fail(res,e)}});
 app.delete('/api/novels/:id',async(req,res)=>{try{await q(supabase.from('novels').delete().eq('id',req.params.id));res.json({ok:true})}catch(e){fail(res,e)}});
-
 app.get('/api/glossary/:novelId',async(req,res)=>{try{res.json(await getGlossary(req.params.novelId))}catch(e){fail(res,e)}});
-app.post('/api/glossary/:novelId',async(req,res)=>{try{
-  const body={novel_id:req.params.novelId,type:req.body.type,original:req.body.original,translation:req.body.translation,note:req.body.note||'',voice:req.body.voice||''};
-  const data=await q(supabase.from('glossary_terms').upsert(body,{onConflict:'novel_id,type,original'}).select().single());res.json(data)
-}catch(e){fail(res,e)}});
+app.post('/api/glossary/:novelId',async(req,res)=>{try{const body={novel_id:req.params.novelId,type:req.body.type,original:req.body.original,translation:req.body.translation,note:req.body.note||'',voice:req.body.voice||''};const data=await q(supabase.from('glossary_terms').upsert(body,{onConflict:'novel_id,type,original'}).select().single());res.json(data)}catch(e){fail(res,e)}});
 app.delete('/api/glossary/:novelId/:type/:id',async(req,res)=>{try{await q(supabase.from('glossary_terms').delete().eq('novel_id',req.params.novelId).eq('id',req.params.id));res.json({ok:true})}catch(e){fail(res,e)}});
-
 app.get('/api/episodes/:novelId',async(req,res)=>{try{res.json(await q(supabase.from('episodes').select('*').eq('novel_id',req.params.novelId).order('number')))}catch(e){fail(res,e)}});
 app.post('/api/episodes/:novelId',async(req,res)=>{try{const data=await q(supabase.from('episodes').insert({novel_id:req.params.novelId,number:req.body.number,title:req.body.title||'',source:req.body.source||'',translation:req.body.translation||'',status:'draft'}).select().single());res.json(data)}catch(e){fail(res,e)}});
 app.put('/api/episodes/:novelId/:id',async(req,res)=>{try{const data=await q(supabase.from('episodes').update({number:req.body.number,title:req.body.title,source:req.body.source,translation:req.body.translation,status:req.body.status||'draft',updated_at:new Date().toISOString()}).eq('novel_id',req.params.novelId).eq('id',req.params.id).select().single());res.json(data)}catch(e){fail(res,e)}});
@@ -144,62 +139,32 @@ app.post('/api/translate',async(req,res)=>{
   const glossary=await getGlossary(novelId);
   let activeModel=MODELS[0];
   let chunks=splitText(source,CHUNK_SIZES[activeModel]);
-  let result=''; let modelUsed=activeModel;
-
+  let result='';let modelUsed=activeModel;
   for(let i=0;i<chunks.length;i++){
     const chunk=chunks[i];
     const previousSource=chunks[i-1]?chunks[i-1].slice(-CONTEXT_OVERLAP):'';
     try{
       const prompt=masterPrompt({style:novel.style,glossary,source:chunk,previousTail:result.slice(-5000),sourceContext:previousSource});
       const r=await generateWithRetries(prompt,activeModel);
-      result+=(result?'\n\n':'')+r.text.trim();
-      modelUsed=r.model;
+      result+=(result?'\n\n':'')+r.text.trim();modelUsed=r.model;
     }catch(e){
-      if(!retryable(e)) throw e;
+      if(!retryable(e))throw e;
       if(activeModel===MODELS[0]){
         activeModel=MODELS[1];
         console.log(`3.1 exhausted after 2 retries. Switching to ${activeModel} for remaining chunks (${CHUNK_SIZES[activeModel]} chars).`);
         const remainingSource=chunks.slice(i).join('\n\n');
-        chunks=chunks.slice(0,i).concat(splitText(remainingSource,CHUNK_SIZES[activeModel]));
-        i--;
-        continue;
+        chunks=chunks.slice(0,i).concat(splitText(remainingSource,CHUNK_SIZES[activeModel]));i--;continue;
       }
-      console.log('3.5 exhausted after 2 retries. Translation failed for this request.');
-      throw e;
+      console.log('3.5 exhausted after 2 retries. Translation failed for this request.');throw e;
     }
   }
-
-  if(episodeId) await q(supabase.from('episodes').update({source,translation:result,model:modelUsed,status:'translated',updated_at:new Date().toISOString()}).eq('id',episodeId).eq('novel_id',novelId));
+  if(episodeId)await q(supabase.from('episodes').update({source,translation:result,model:modelUsed,status:'translated',updated_at:new Date().toISOString()}).eq('id',episodeId).eq('novel_id',novelId));
   res.json({translation:result,model:modelUsed});
  }catch(e){fail(res,e)}
 });
 
-async function exportNovel(novelId){
- const novel=await q(supabase.from('novels').select('*').eq('id',novelId).single());
- const glossary=await q(supabase.from('glossary_terms').select('*').eq('novel_id',novelId));
- const episodes=await q(supabase.from('episodes').select('*').eq('novel_id',novelId).order('number'));
- return {version:2,exportedAt:new Date().toISOString(),novels:[novel],glossary,episodes};
-}
+async function exportNovel(novelId){const novel=await q(supabase.from('novels').select('*').eq('id',novelId).single());const glossary=await q(supabase.from('glossary_terms').select('*').eq('novel_id',novelId));const episodes=await q(supabase.from('episodes').select('*').eq('novel_id',novelId).order('number'));return {version:2,exportedAt:new Date().toISOString(),novels:[novel],glossary,episodes};}
 app.get('/api/export/novel/:id',async(req,res)=>{try{res.setHeader('Content-Disposition','attachment; filename=novel-backup.json');res.json(await exportNovel(req.params.id))}catch(e){fail(res,e)}});
-app.get('/api/export/all',async(_,res)=>{try{
- const novels=await q(supabase.from('novels').select('*').order('created_at'));
- const glossary=await q(supabase.from('glossary_terms').select('*'));
- const episodes=await q(supabase.from('episodes').select('*').order('novel_id,number'));
- res.setHeader('Content-Disposition','attachment; filename=webnovel-backup.json');res.json({version:2,exportedAt:new Date().toISOString(),novels,glossary,episodes});
-}catch(e){fail(res,e)}});
-
-app.post('/api/import',async(req,res)=>{try{
- const d=req.body;if(!Array.isArray(d.novels))throw new Error('Invalid backup');
- const novelMap=new Map();let ec=0;
- for(const n of d.novels){
-   const existing=await q(supabase.from('novels').select('id').eq('id',n.id).maybeSingle());
-   if(existing) await q(supabase.from('novels').update({name:n.name,style:n.style||'',updated_at:new Date().toISOString()}).eq('id',n.id));
-   else await q(supabase.from('novels').insert({id:n.id,name:n.name,style:n.style||''}));
-   novelMap.set(n.id,n.id);
- }
- if(Array.isArray(d.glossary)&&d.glossary.length) await q(supabase.from('glossary_terms').upsert(d.glossary.map(x=>({id:x.id,novel_id:x.novel_id,type:x.type,original:x.original,translation:x.translation,note:x.note||'',voice:x.voice||''})),{onConflict:'id'}));
- if(Array.isArray(d.episodes)&&d.episodes.length){await q(supabase.from('episodes').upsert(d.episodes.map(x=>({id:x.id,novel_id:x.novel_id,number:x.number,title:x.title||'',source:x.source||'',translation:x.translation||'',model:x.model||'',status:x.status||'draft',created_at:x.created_at||new Date().toISOString(),updated_at:x.updated_at||new Date().toISOString()})),{onConflict:'id'}));ec=d.episodes.length}
- res.json({novels:d.novels.length,episodes:ec});
-}catch(e){fail(res,e)}});
-
+app.get('/api/export/all',async(_,res)=>{try{const novels=await q(supabase.from('novels').select('*').order('created_at'));const glossary=await q(supabase.from('glossary_terms').select('*'));const episodes=await q(supabase.from('episodes').select('*').order('novel_id,number'));res.setHeader('Content-Disposition','attachment; filename=webnovel-backup.json');res.json({version:2,exportedAt:new Date().toISOString(),novels,glossary,episodes})}catch(e){fail(res,e)}});
+app.post('/api/import',async(req,res)=>{try{const d=req.body;if(!Array.isArray(d.novels))throw new Error('Invalid backup');const novelMap=new Map();let ec=0;for(const n of d.novels){const existing=await q(supabase.from('novels').select('id').eq('id',n.id).maybeSingle());if(existing)await q(supabase.from('novels').update({name:n.name,style:n.style||'',updated_at:new Date().toISOString()}).eq('id',n.id));else await q(supabase.from('novels').insert({id:n.id,name:n.name,style:n.style||''}));novelMap.set(n.id,n.id)}if(Array.isArray(d.glossary)&&d.glossary.length)await q(supabase.from('glossary_terms').upsert(d.glossary.map(x=>({id:x.id,novel_id:x.novel_id,type:x.type,original:x.original,translation:x.translation,note:x.note||'',voice:x.voice||''})),{onConflict:'id'}));if(Array.isArray(d.episodes)&&d.episodes.length){await q(supabase.from('episodes').upsert(d.episodes.map(x=>({id:x.id,novel_id:x.novel_id,number:x.number,title:x.title||'',source:x.source||'',translation:x.translation||'',model:x.model||'',status:x.status||'draft',created_at:x.created_at||new Date().toISOString(),updated_at:x.updated_at||new Date().toISOString()})),{onConflict:'id'}));ec=d.episodes.length}res.json({novels:d.novels.length,episodes:ec})}catch(e){fail(res,e)}});
 app.listen(PORT,'0.0.0.0',()=>console.log(`Webnovel Translator running on port ${PORT}`));
