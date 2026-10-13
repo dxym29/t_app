@@ -11,39 +11,28 @@ app.use(express.static('public'));
 
 const ai=new GoogleGenAI({apiKey:process.env.GEMINI_API_KEY});
 const supabase=createClient(process.env.SUPABASE_URL,process.env.SUPABASE_SERVICE_ROLE_KEY,{auth:{persistSession:false}});
-const MODELS=[
- 'gemini-3.1-flash-lite',
- 'gemini-3.5-flash-lite'
-];
-const CHUNK_SIZE=2000;
-const CONTEXT_OVERLAP=500;
+const MODELS=['gemini-3.1-flash-lite','gemini-3.5-flash-lite'];
+const CHUNK_SIZES={'gemini-3.1-flash-lite':4000,'gemini-3.5-flash-lite':3000};
+const CONTEXT_OVERLAP=200;
 
 function id(){return crypto.randomUUID()}
 function fail(res,e){console.error(e);return res.status(500).json({error:e.message||'Server error'})}
 async function q(promise){const {data,error}=await promise;if(error)throw new Error(error.message);return data}
 function retryable(e){const s=String(e?.message||e);return /429|quota|RESOURCE_EXHAUSTED|503|UNAVAILABLE|overloaded|timeout|temporar/i.test(s)}
 function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
-async function generateWithFallback(prompt){
-  let last;
-  for(const model of MODELS){
-    try{
-      console.log(`Trying model: ${model}`);
-      const response=await ai.models.generateContent({model,contents:prompt,config:{temperature:0.55,maxOutputTokens:8192}});
-      console.log(`SUCCESS: ${model}`);
-      return {text:response.text||'',model};
-    }catch(e){
-      last=e; console.error(`FAILED: ${model}`,e?.message||e);
-      if(!retryable(e)) break;
-      await sleep(600);
-    }
+async function generateModel(prompt,model){
+  console.log(`Trying model: ${model}`);
+  try{
+    const response=await ai.models.generateContent({model,contents:prompt,config:{temperature:0.55,maxOutputTokens:8192}});
+    console.log(`SUCCESS: ${model}`);
+    return {text:response.text||'',model};
+  }catch(e){
+    console.error(`FAILED: ${model}`,e?.message||e);
+    throw e;
   }
-  throw last||new Error('All Gemini models failed');
 }
 
-// Split near paragraph/sentence boundaries. Chunks stay around 2,000 chars.
-// Context overlap is supplied separately to the model, so the same source text
-// is never translated twice and duplicated in the final result.
-function splitText(text,max=CHUNK_SIZE){
+function splitText(text,max){
   const out=[]; let rest=text.trim();
   while(rest){
     if(rest.length<=max){out.push(rest);break;}
@@ -134,12 +123,24 @@ app.post('/api/translate',async(req,res)=>{
   const {novelId,episodeId,source}=req.body;if(!novelId||!source?.trim())return res.status(400).json({error:'Novel and source are required'});
   const novel=await q(supabase.from('novels').select('*').eq('id',novelId).single());
   const glossary=await getGlossary(novelId);
-  const chunks=splitText(source); let result=''; let modelUsed='';
+  const chunks=splitText(source,CHUNK_SIZES[MODELS[0]]); let result=''; let modelUsed='';
   for(let i=0;i<chunks.length;i++){
     const chunk=chunks[i];
     const previousSource=chunks[i-1]?chunks[i-1].slice(-CONTEXT_OVERLAP):'';
-    const r=await generateWithFallback(masterPrompt({style:novel.style,glossary,source:chunk,previousTail:result.slice(-5000),sourceContext:previousSource}));
-    result+=(result?'\n\n':'')+r.text.trim(); modelUsed=r.model;
+    try{
+      const r=await generateModel(masterPrompt({style:novel.style,glossary,source:chunk,previousTail:result.slice(-5000),sourceContext:previousSource}),MODELS[0]);
+      result+=(result?'\n\n':'')+r.text.trim(); modelUsed=r.model;
+    }catch(e){
+      if(!retryable(e)) throw e;
+      console.log(`Falling back to ${MODELS[1]} with ${CHUNK_SIZES[MODELS[1]]}-character chunks`);
+      const fallbackChunks=splitText(chunk,CHUNK_SIZES[MODELS[1]]);
+      for(let j=0;j<fallbackChunks.length;j++){
+        const fallbackChunk=fallbackChunks[j];
+        const fallbackContext=j===0?previousSource:fallbackChunks[j-1].slice(-CONTEXT_OVERLAP);
+        const r=await generateModel(masterPrompt({style:novel.style,glossary,source:fallbackChunk,previousTail:result.slice(-5000),sourceContext:fallbackContext}),MODELS[1]);
+        result+=(result?'\n\n':'')+r.text.trim(); modelUsed=r.model;
+      }
+    }
   }
   if(episodeId) await q(supabase.from('episodes').update({source,translation:result,model:modelUsed,status:'translated',updated_at:new Date().toISOString()}).eq('id',episodeId).eq('novel_id',novelId));
   res.json({translation:result,model:modelUsed});
