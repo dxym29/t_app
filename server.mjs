@@ -111,7 +111,6 @@ ${sourceContext||'(none)'}
 SOURCE:
 ${source}`;
 }
-
 async function getGlossary(novelId){
   const rows=await q(supabase.from('glossary_terms').select('*').eq('novel_id',novelId).order('created_at'));
   const g={characters:[],items:[],locations:[],organizations:[],skills:[],other:[]};
@@ -127,9 +126,11 @@ app.delete('/api/novels/:id',async(req,res)=>{try{await q(supabase.from('novels'
 app.get('/api/glossary/:novelId',async(req,res)=>{try{res.json(await getGlossary(req.params.novelId))}catch(e){fail(res,e)}});
 app.post('/api/glossary/:novelId',async(req,res)=>{try{const body={novel_id:req.params.novelId,type:req.body.type,original:req.body.original,translation:req.body.translation,note:req.body.note||'',voice:req.body.voice||''};const data=await q(supabase.from('glossary_terms').upsert(body,{onConflict:'novel_id,type,original'}).select().single());res.json(data)}catch(e){fail(res,e)}});
 app.delete('/api/glossary/:novelId/:type/:id',async(req,res)=>{try{await q(supabase.from('glossary_terms').delete().eq('novel_id',req.params.novelId).eq('id',req.params.id));res.json({ok:true})}catch(e){fail(res,e)}});
-app.get('/api/episodes/:novelId',async(req,res)=>{try{res.json(await q(supabase.from('episodes').select('*').eq('novel_id',req.params.novelId).order('number')))}catch(e){fail(res,e)}});
+// Keep episode lists lightweight. Full source/translation loads only for the selected episode.
+app.get('/api/episodes/:novelId',async(req,res)=>{try{res.json(await q(supabase.from('episodes').select('id,novel_id,number,title,status,model,updated_at').eq('novel_id',req.params.novelId).order('number')))}catch(e){fail(res,e)}});
+app.get('/api/episodes/:novelId/:id',async(req,res)=>{try{res.json(await q(supabase.from('episodes').select('*').eq('novel_id',req.params.novelId).eq('id',req.params.id).single()))}catch(e){fail(res,e)}});
 app.post('/api/episodes/:novelId',async(req,res)=>{try{const data=await q(supabase.from('episodes').insert({novel_id:req.params.novelId,number:req.body.number,title:req.body.title||'',source:req.body.source||'',translation:req.body.translation||'',status:'draft'}).select().single());res.json(data)}catch(e){fail(res,e)}});
-app.put('/api/episodes/:novelId/:id',async(req,res)=>{try{const data=await q(supabase.from('episodes').update({number:req.body.number,title:req.body.title,source:req.body.source,translation:req.body.translation,status:req.body.status||'draft',updated_at:new Date().toISOString()}).eq('novel_id',req.params.novelId).eq('id',req.params.id).select().single());res.json(data)}catch(e){fail(res,e)}});
+app.put('/api/episodes/:novelId/:id',async(req,res)=>{try{const data=await q(supabase.from('episodes').update({number:req.body.number,title:req.body.title,source:req.body.source,translation:req.body.translation,status:req.body.status||'draft',updated_at:new Date().toISOString()}).eq('novel_id',req.params.novelId).eq('id',req.params.id).select('id,novel_id,number,title,status,model,updated_at').single());res.json(data)}catch(e){fail(res,e)}});
 app.delete('/api/episodes/:novelId/:id',async(req,res)=>{try{await q(supabase.from('episodes').delete().eq('novel_id',req.params.novelId).eq('id',req.params.id));res.json({ok:true})}catch(e){fail(res,e)}});
 
 app.post('/api/translate',async(req,res)=>{
