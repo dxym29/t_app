@@ -19,19 +19,12 @@ function id(){return crypto.randomUUID()}
 function fail(res,e){console.error(e);return res.status(500).json({error:e.message||'Server error'})}
 async function q(promise){const {data,error}=await promise;if(error)throw new Error(error.message);return data}
 function retryable(e){const s=String(e?.message||e);return /429|quota|RESOURCE_EXHAUSTED|503|UNAVAILABLE|overloaded|timeout|temporar/i.test(s)}
-function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
 async function generateModel(prompt,model){
   console.log(`Trying model: ${model}`);
-  try{
-    const response=await ai.models.generateContent({model,contents:prompt,config:{temperature:0.55,maxOutputTokens:8192}});
-    console.log(`SUCCESS: ${model}`);
-    return {text:response.text||'',model};
-  }catch(e){
-    console.error(`FAILED: ${model}`,e?.message||e);
-    throw e;
-  }
+  const response=await ai.models.generateContent({model,contents:prompt,config:{temperature:0.55,maxOutputTokens:8192}});
+  console.log(`SUCCESS: ${model}`);
+  return {text:response.text||'',model};
 }
-
 function splitText(text,max){
   const out=[]; let rest=text.trim();
   while(rest){
@@ -123,25 +116,31 @@ app.post('/api/translate',async(req,res)=>{
   const {novelId,episodeId,source}=req.body;if(!novelId||!source?.trim())return res.status(400).json({error:'Novel and source are required'});
   const novel=await q(supabase.from('novels').select('*').eq('id',novelId).single());
   const glossary=await getGlossary(novelId);
-  const chunks=splitText(source,CHUNK_SIZES[MODELS[0]]); let result=''; let modelUsed='';
+  let activeModel=MODELS[0];
+  let chunks=splitText(source,CHUNK_SIZES[activeModel]);
+  let result=''; let modelUsed=activeModel;
+
   for(let i=0;i<chunks.length;i++){
     const chunk=chunks[i];
     const previousSource=chunks[i-1]?chunks[i-1].slice(-CONTEXT_OVERLAP):'';
     try{
-      const r=await generateModel(masterPrompt({style:novel.style,glossary,source:chunk,previousTail:result.slice(-5000),sourceContext:previousSource}),MODELS[0]);
-      result+=(result?'\n\n':'')+r.text.trim(); modelUsed=r.model;
+      const r=await generateModel(masterPrompt({style:novel.style,glossary,source:chunk,previousTail:result.slice(-5000),sourceContext:previousSource}),activeModel);
+      result+=(result?'\n\n':'')+r.text.trim();
+      modelUsed=r.model;
     }catch(e){
       if(!retryable(e)) throw e;
-      console.log(`Falling back to ${MODELS[1]} with ${CHUNK_SIZES[MODELS[1]]}-character chunks`);
-      const fallbackChunks=splitText(chunk,CHUNK_SIZES[MODELS[1]]);
-      for(let j=0;j<fallbackChunks.length;j++){
-        const fallbackChunk=fallbackChunks[j];
-        const fallbackContext=j===0?previousSource:fallbackChunks[j-1].slice(-CONTEXT_OVERLAP);
-        const r=await generateModel(masterPrompt({style:novel.style,glossary,source:fallbackChunk,previousTail:result.slice(-5000),sourceContext:fallbackContext}),MODELS[1]);
-        result+=(result?'\n\n':'')+r.text.trim(); modelUsed=r.model;
+      if(activeModel===MODELS[0]){
+        activeModel=MODELS[1];
+        console.log(`3.1 unavailable. Switching to ${activeModel} for remaining chunks (${CHUNK_SIZES[activeModel]} chars).`);
+        const remainingSource=chunks.slice(i).join('\n\n');
+        chunks=chunks.slice(0,i).concat(splitText(remainingSource,CHUNK_SIZES[activeModel]));
+        i--;
+        continue;
       }
+      throw e;
     }
   }
+
   if(episodeId) await q(supabase.from('episodes').update({source,translation:result,model:modelUsed,status:'translated',updated_at:new Date().toISOString()}).eq('id',episodeId).eq('novel_id',novelId));
   res.json({translation:result,model:modelUsed});
  }catch(e){fail(res,e)}
