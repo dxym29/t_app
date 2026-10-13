@@ -12,8 +12,11 @@ app.use(express.static('public'));
 const ai=new GoogleGenAI({apiKey:process.env.GEMINI_API_KEY});
 const supabase=createClient(process.env.SUPABASE_URL,process.env.SUPABASE_SERVICE_ROLE_KEY,{auth:{persistSession:false}});
 const MODELS=[
- 'gemini-3.5-flash','gemini-3.5-flash-lite'
+ 'gemini-3.1-flash-lite',
+ 'gemini-3.5-flash-lite'
 ];
+const CHUNK_SIZE=2000;
+const CONTEXT_OVERLAP=500;
 
 function id(){return crypto.randomUUID()}
 function fail(res,e){console.error(e);return res.status(500).json({error:e.message||'Server error'})}
@@ -25,7 +28,7 @@ async function generateWithFallback(prompt){
   for(const model of MODELS){
     try{
       console.log(`Trying model: ${model}`);
-      const response=await ai.models.generateContent({model,contents:prompt,config:{temperature:0.55,maxOutputTokens:32768}});
+      const response=await ai.models.generateContent({model,contents:prompt,config:{temperature:0.55,maxOutputTokens:8192}});
       console.log(`SUCCESS: ${model}`);
       return {text:response.text||'',model};
     }catch(e){
@@ -36,15 +39,22 @@ async function generateWithFallback(prompt){
   }
   throw last||new Error('All Gemini models failed');
 }
-function splitText(text,max=18000){
-  const paras=text.split(/\n\s*\n/); const out=[]; let cur='';
-  for(const p of paras){
-    if((cur+p).length<=max){cur+=(cur?'\n\n':'')+p;continue}
-    if(cur)out.push(cur);
-    if(p.length<=max)cur=p;
-    else for(let i=0;i<p.length;i+=max)out.push(p.slice(i,i+max));
+
+// Split near paragraph/sentence boundaries. Chunks stay around 2,000 chars.
+// Context overlap is supplied separately to the model, so the same source text
+// is never translated twice and duplicated in the final result.
+function splitText(text,max=CHUNK_SIZE){
+  const out=[]; let rest=text.trim();
+  while(rest){
+    if(rest.length<=max){out.push(rest);break;}
+    let cut=rest.lastIndexOf('\n\n',max);
+    if(cut<Math.floor(max*0.55)) cut=rest.lastIndexOf('\n',max);
+    if(cut<Math.floor(max*0.55)) cut=rest.lastIndexOf(' ',max);
+    if(cut<Math.floor(max*0.55)) cut=max;
+    out.push(rest.slice(0,cut).trim());
+    rest=rest.slice(cut).trim();
   }
-  if(cur)out.push(cur); return out;
+  return out.filter(Boolean);
 }
 function glossaryText(g){
   const lines=[];
@@ -53,7 +63,7 @@ function glossaryText(g){
   }
   return lines.join('\n')||'(none)';
 }
-function masterPrompt({style,glossary,source,previousTail}){
+function masterPrompt({style,glossary,source,previousTail,sourceContext}){
 return `You are a professional Myanmar webnovel translator.
 
 TASK:
@@ -72,6 +82,8 @@ ABSOLUTE RULES:
 - Narration and dialogue should feel stylistically distinct where appropriate.
 - The glossary below is authoritative. If a name/term is established there, use EXACTLY that Myanmar form.
 - Preserve titles, ranks, relationships, organizations, skills, items, and place names consistently.
+- The CONTEXT section is for continuity only. NEVER translate or repeat it as part of the SOURCE.
+- Translate ONLY the SOURCE section.
 - Do not add translator notes, explanations, summaries, headings, or comments.
 - Return ONLY the Myanmar translation.
 - Accuracy before elegance, but the final Myanmar must be natural.
@@ -84,6 +96,9 @@ ${glossaryText(glossary)}
 
 PREVIOUS TRANSLATED TAIL FOR CONTINUITY ONLY:
 ${previousTail||'(none)'}
+
+SOURCE CONTEXT OVERLAP FOR CONTINUITY ONLY:
+${sourceContext||'(none)'}
 
 SOURCE:
 ${source}`;
@@ -120,8 +135,10 @@ app.post('/api/translate',async(req,res)=>{
   const novel=await q(supabase.from('novels').select('*').eq('id',novelId).single());
   const glossary=await getGlossary(novelId);
   const chunks=splitText(source); let result=''; let modelUsed='';
-  for(const chunk of chunks){
-    const r=await generateWithFallback(masterPrompt({style:novel.style,glossary,source:chunk,previousTail:result.slice(-5000)}));
+  for(let i=0;i<chunks.length;i++){
+    const chunk=chunks[i];
+    const previousSource=chunks[i-1]?chunks[i-1].slice(-CONTEXT_OVERLAP):'';
+    const r=await generateWithFallback(masterPrompt({style:novel.style,glossary,source:chunk,previousTail:result.slice(-5000),sourceContext:previousSource}));
     result+=(result?'\n\n':'')+r.text.trim(); modelUsed=r.model;
   }
   if(episodeId) await q(supabase.from('episodes').update({source,translation:result,model:modelUsed,status:'translated',updated_at:new Date().toISOString()}).eq('id',episodeId).eq('novel_id',novelId));
