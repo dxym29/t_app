@@ -12,9 +12,9 @@ app.use(express.static('public'));
 const ai=new GoogleGenAI({apiKey:process.env.GEMINI_API_KEY});
 const supabase=createClient(process.env.SUPABASE_URL,process.env.SUPABASE_SERVICE_ROLE_KEY,{auth:{persistSession:false}});
 const MODELS=['gemini-3.1-flash-lite','gemini-3.5-flash-lite'];
-const CHUNK_SIZES={'gemini-3.1-flash-lite':4000,'gemini-3.5-flash-lite':4000};
+const CHUNK_SIZES={'gemini-3.1-flash-lite':5000,'gemini-3.5-flash-lite':5000};
 const CONTEXT_OVERLAP=200;
-const MODEL_TIMEOUT=30000;
+const MODEL_TIMEOUT=45000;
 
 function id(){return crypto.randomUUID()}
 function fail(res,e){console.error(e);return res.status(500).json({error:e.message||'Server error'})}
