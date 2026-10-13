@@ -35,7 +35,7 @@ async function generateWithRetries(prompt,model){
   for(let attempt=0;attempt<=MAX_RETRIES_PER_MODEL;attempt++){
     try{return await generateModel(prompt,model)}catch(e){
       lastError=e;
-      if(!retryable(e)||attempt===MAX_RETRIES_PER_MODEL) throw e;
+      if(!retryable(e)||attempt===MAX_RETRIES_PER_MODEL)throw e;
       console.log(`${model} failed (attempt ${attempt+1}/${MAX_RETRIES_PER_MODEL}). Retrying in 3s...`);
       await sleep(RETRY_DELAY);
     }
@@ -51,16 +51,11 @@ function splitText(text,maxChars=7000){
     const block=p.trim();
     if(!block)continue;
     const candidate=current?current+'\n\n'+block:block;
-    if(candidate.length<=maxChars){
-      current=candidate;
-    }else{
+    if(candidate.length<=maxChars){current=candidate}
+    else{
       if(current)chunks.push(current);
-      if(block.length<=maxChars){
-        current=block;
-      }else{
-        for(let i=0;i<block.length;i+=maxChars)chunks.push(block.slice(i,i+maxChars));
-        current='';
-      }
+      if(block.length<=maxChars)current=block;
+      else{for(let i=0;i<block.length;i+=maxChars)chunks.push(block.slice(i,i+maxChars));current=''}
     }
   }
   if(current)chunks.push(current);
@@ -111,6 +106,7 @@ ${sourceContext||'(none)'}
 SOURCE:
 ${source}`;
 }
+
 async function getGlossary(novelId){
   const rows=await q(supabase.from('glossary_terms').select('*').eq('novel_id',novelId).order('created_at'));
   const g={characters:[],items:[],locations:[],organizations:[],skills:[],other:[]};
@@ -126,11 +122,9 @@ app.delete('/api/novels/:id',async(req,res)=>{try{await q(supabase.from('novels'
 app.get('/api/glossary/:novelId',async(req,res)=>{try{res.json(await getGlossary(req.params.novelId))}catch(e){fail(res,e)}});
 app.post('/api/glossary/:novelId',async(req,res)=>{try{const body={novel_id:req.params.novelId,type:req.body.type,original:req.body.original,translation:req.body.translation,note:req.body.note||'',voice:req.body.voice||''};const data=await q(supabase.from('glossary_terms').upsert(body,{onConflict:'novel_id,type,original'}).select().single());res.json(data)}catch(e){fail(res,e)}});
 app.delete('/api/glossary/:novelId/:type/:id',async(req,res)=>{try{await q(supabase.from('glossary_terms').delete().eq('novel_id',req.params.novelId).eq('id',req.params.id));res.json({ok:true})}catch(e){fail(res,e)}});
-// Keep episode lists lightweight. Full source/translation loads only for the selected episode.
-app.get('/api/episodes/:novelId',async(req,res)=>{try{res.json(await q(supabase.from('episodes').select('id,novel_id,number,title,status,model,updated_at').eq('novel_id',req.params.novelId).order('number')))}catch(e){fail(res,e)}});
-app.get('/api/episodes/:novelId/:id',async(req,res)=>{try{res.json(await q(supabase.from('episodes').select('*').eq('novel_id',req.params.novelId).eq('id',req.params.id).single()))}catch(e){fail(res,e)}});
+app.get('/api/episodes/:novelId',async(req,res)=>{try{res.json(await q(supabase.from('episodes').select('*').eq('novel_id',req.params.novelId).order('number')))}catch(e){fail(res,e)}});
 app.post('/api/episodes/:novelId',async(req,res)=>{try{const data=await q(supabase.from('episodes').insert({novel_id:req.params.novelId,number:req.body.number,title:req.body.title||'',source:req.body.source||'',translation:req.body.translation||'',status:'draft'}).select().single());res.json(data)}catch(e){fail(res,e)}});
-app.put('/api/episodes/:novelId/:id',async(req,res)=>{try{const data=await q(supabase.from('episodes').update({number:req.body.number,title:req.body.title,source:req.body.source,translation:req.body.translation,status:req.body.status||'draft',updated_at:new Date().toISOString()}).eq('novel_id',req.params.novelId).eq('id',req.params.id).select('id,novel_id,number,title,status,model,updated_at').single());res.json(data)}catch(e){fail(res,e)}});
+app.put('/api/episodes/:novelId/:id',async(req,res)=>{try{const data=await q(supabase.from('episodes').update({number:req.body.number,title:req.body.title,source:req.body.source,translation:req.body.translation,status:req.body.status||'draft',updated_at:new Date().toISOString()}).eq('novel_id',req.params.novelId).eq('id',req.params.id).select().single());res.json(data)}catch(e){fail(res,e)}});
 app.delete('/api/episodes/:novelId/:id',async(req,res)=>{try{await q(supabase.from('episodes').delete().eq('novel_id',req.params.novelId).eq('id',req.params.id));res.json({ok:true})}catch(e){fail(res,e)}});
 
 app.post('/api/translate',async(req,res)=>{
@@ -138,23 +132,17 @@ app.post('/api/translate',async(req,res)=>{
   const {novelId,episodeId,source}=req.body;if(!novelId||!source?.trim())return res.status(400).json({error:'Novel and source are required'});
   const novel=await q(supabase.from('novels').select('*').eq('id',novelId).single());
   const glossary=await getGlossary(novelId);
-  let activeModel=MODELS[0];
-  let chunks=splitText(source,CHUNK_SIZES[activeModel]);
-  let result='';let modelUsed=activeModel;
+  let activeModel=MODELS[0];let chunks=splitText(source,CHUNK_SIZES[activeModel]);let result='';let modelUsed=activeModel;
   for(let i=0;i<chunks.length;i++){
-    const chunk=chunks[i];
-    const previousSource=chunks[i-1]?chunks[i-1].slice(-CONTEXT_OVERLAP):'';
+    const chunk=chunks[i];const previousSource=chunks[i-1]?chunks[i-1].slice(-CONTEXT_OVERLAP):'';
     try{
       const prompt=masterPrompt({style:novel.style,glossary,source:chunk,previousTail:result.slice(-5000),sourceContext:previousSource});
-      const r=await generateWithRetries(prompt,activeModel);
-      result+=(result?'\n\n':'')+r.text.trim();modelUsed=r.model;
+      const r=await generateWithRetries(prompt,activeModel);result+=(result?'\n\n':'')+r.text.trim();modelUsed=r.model;
     }catch(e){
       if(!retryable(e))throw e;
       if(activeModel===MODELS[0]){
-        activeModel=MODELS[1];
-        console.log(`3.1 exhausted after 2 retries. Switching to ${activeModel} for remaining chunks (${CHUNK_SIZES[activeModel]} chars).`);
-        const remainingSource=chunks.slice(i).join('\n\n');
-        chunks=chunks.slice(0,i).concat(splitText(remainingSource,CHUNK_SIZES[activeModel]));i--;continue;
+        activeModel=MODELS[1];console.log(`3.1 exhausted after 2 retries. Switching to ${activeModel} for remaining chunks (${CHUNK_SIZES[activeModel]} chars).`);
+        const remainingSource=chunks.slice(i).join('\n\n');chunks=chunks.slice(0,i).concat(splitText(remainingSource,CHUNK_SIZES[activeModel]));i--;continue;
       }
       console.log('3.5 exhausted after 2 retries. Translation failed for this request.');throw e;
     }
