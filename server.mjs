@@ -12,17 +12,28 @@ app.use(express.static('public'));
 const ai=new GoogleGenAI({apiKey:process.env.GEMINI_API_KEY});
 const supabase=createClient(process.env.SUPABASE_URL,process.env.SUPABASE_SERVICE_ROLE_KEY,{auth:{persistSession:false}});
 const MODELS=['gemini-3.1-flash-lite','gemini-3.5-flash-lite'];
-const CHUNK_SIZES={'gemini-3.1-flash-lite':4000,'gemini-3.5-flash-lite':3000};
+const CHUNK_SIZES={'gemini-3.1-flash-lite':4000,'gemini-3.5-flash-lite':4000};
 const CONTEXT_OVERLAP=200;
+const MODEL_TIMEOUT=30000;
 
 function id(){return crypto.randomUUID()}
 function fail(res,e){console.error(e);return res.status(500).json({error:e.message||'Server error'})}
 async function q(promise){const {data,error}=await promise;if(error)throw new Error(error.message);return data}
 function retryable(e){const s=String(e?.message||e);return /429|quota|RESOURCE_EXHAUSTED|503|UNAVAILABLE|overloaded|timeout|temporar/i.test(s)}
 async function generateModel(prompt,model){
+  const started=Date.now();
   console.log(`Trying model: ${model}`);
-  const response=await ai.models.generateContent({model,contents:prompt,config:{temperature:0.55,maxOutputTokens:8192}});
-  console.log(`SUCCESS: ${model}`);
+  const response=await ai.models.generateContent({
+    model,
+    contents:prompt,
+    config:{
+      temperature:0.7,
+      maxOutputTokens:8192,
+      automaticContinuation:false,
+      httpOptions:{timeout:MODEL_TIMEOUT}
+    }
+  });
+  console.log(`SUCCESS: ${model} (${Date.now()-started}ms)`);
   return {text:response.text||'',model};
 }
 function splitText(text,max){
