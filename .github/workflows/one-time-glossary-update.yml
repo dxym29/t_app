@@ -1,4 +1,4 @@
-name: One-time glossary UI and prompt update
+name: One-time glossary and Name Lock update
 on:
   schedule:
     - cron: '*/5 * * * *'
@@ -9,13 +9,35 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Apply glossary improvements
+      - name: Patch translation consistency
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
           import re
-          server=Path('server.mjs'); text=server.read_text(encoding='utf-8')
+          p=Path('server.mjs')
+          text=p.read_text(encoding='utf-8')
+
+          pattern=r"function buildNameLocks\(g\)\{.*?function masterPrompt"
+          replacement=r'''function normalizeLockTerm(value){return String(value??'').replace(/\s+/g,' ').trim()}
+          function escapeRegex(value){return String(value).replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}
+          function lockRegex(term){const clean=normalizeLockTerm(term);if(!clean)return null;return new RegExp(clean.split(/\s+/).map(escapeRegex).join('\\s+'),'g')}
+          function buildNameLocks(g){const locks=[];const seen=new Set();let n=1;for(const [type,arr] of Object.entries(g||{}))for(const x of arr||[]){const original=normalizeLockTerm(x.original),translation=normalizeLockTerm(x.translation);if(!original||!translation||seen.has(original))continue;seen.add(original);locks.push({type,original,translation,token:`[[NAMELOCK_${String(n++).padStart(3,'0')}]]`})}locks.sort((a,b)=>b.original.length-a.original.length);return locks}
+          function filterGlossaryToSource(g,source){const text=String(source||'');const out={};for(const [type,arr] of Object.entries(g||{}))out[type]=(arr||[]).filter(x=>{const original=normalizeLockTerm(x.original),re=lockRegex(original);return !!(original&&re&&re.test(text))});return out}
+          function lockText(text,locks){let out=String(text||'');for(const x of locks){const re=lockRegex(x.original);if(re)out=out.replace(re,x.token)}return out}
+          function lockTranslationText(text,locks){let out=String(text||'');for(const x of [...locks].sort((a,b)=>b.translation.length-a.translation.length)){const re=lockRegex(x.translation);if(re)out=out.replace(re,x.token)}return out}
+          function restoreNameLocks(text,locks){let out=String(text||'');for(const x of [...locks].sort((a,b)=>b.original.length-a.original.length)){const re=lockRegex(x.original);if(re)out=out.replace(re,x.token)}for(const x of locks)out=out.split(x.token).join(x.translation);return out}
+          function lockedGlossaryText(g,locks){const map=new Map(locks.map(x=>[x.original,x]));const lines=[];for(const [type,arr] of Object.entries(g||{}))for(const x of arr||[]){const original=normalizeLockTerm(x.original),translation=normalizeLockTerm(x.translation),l=map.get(original);lines.push(`${type}: ${l?.token||original} => ${translation}${x.voice?` | voice: ${x.voice}`:''}${x.note?` | note: ${x.note}`:''}`)}return lines.join('\n')||'(none)'}
+          function countChars(text){return Array.from(String(text||'')).length}
+          function tokenRegex(token){return new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'g')}
+          function countToken(text,token){return (String(text||'').match(tokenRegex(token))||[]).length}
+          function normalizeForCompare(text){return String(text||'').replace(/\r/g,'').replace(/[ \t]+/g,' ').replace(/\n{3,}/g,'\n\n').trim()}
+          function masterPrompt'''
+          text,n=re.subn(pattern,replacement,text,count=1,flags=re.S)
+          if n!=1: raise SystemExit('Name Lock block not found')
+          p.write_text(text,encoding='utf-8')
+
+          # Keep the improved AI #2 prompt already intended for the glossary extractor.
           prompt='''function glossaryPrompt(source){return `You are an IMPORTANT STORY ENTITY DETECTOR for a web-novel translation system. Do NOT list everything in the chapter. Extract only named entities and story terms important enough to remember for consistent translation across later episodes.
 
 PRIMARY GOAL:
@@ -49,68 +71,15 @@ FORMAT:
 SOURCE:
 ${source}`}
 '''
+          text=p.read_text(encoding='utf-8')
           text,n=re.subn(r"function glossaryPrompt\(source\)\{return `.*?`\}\nfunction polishPrompt",prompt+'function polishPrompt',text,count=1,flags=re.S)
           if n!=1: raise SystemExit('glossaryPrompt not found')
-          server.write_text(text,encoding='utf-8')
-          app=Path('public/app.js'); text=app.read_text(encoding='utf-8')
-          text=text.replace("function charCount(text=''){return Array.from(String(text)).length}","function charCount(text=''){return Array.from(String(text)).length}\nfunction cleanTermText(text=''){return String(text??'').replace(/\\s+/g,' ').trim()}")
-          text=text.replace("function renderExtracted(g){extractedCandidates=[];const rows=[];for(const type of ['characters','items','organizations','locations'])for(const x of g[type]||[]){const index=extractedCandidates.length;extractedCandidates.push({type,original:String(x.original||''),suggested:String(x.suggested||'')});rows.push(`<div class=\"term\"><button type=\"button\" onclick=\"addExtractedGlossary(${index})\">Add</button><b>${esc(x.original||'')} → ${esc(x.suggested||'')}</b><small>${esc(type)}</small></div>`)}$('extractedGlossary').innerHTML=rows.length?rows.join(''):'No named entities found.'}","function renderExtracted(g){extractedCandidates=[];const rows=[];for(const type of ['characters','items','organizations','locations'])for(const x of g[type]||[]){const index=extractedCandidates.length;const original=cleanTermText(x.original),suggested=cleanTermText(x.suggested);if(!original)continue;extractedCandidates.push({type,original,suggested});rows.push(`<div class=\"term\"><button type=\"button\" onclick=\"addExtractedGlossary(${index})\">Add</button><b>${esc(original)} → ${esc(suggested)}</b><small>${esc(type)}</small></div>`)}$('extractedGlossary').innerHTML=rows.length?rows.join(''):'No important recurring entities found.'}")
-          text=text.replace("function addExtractedGlossary(index){const x=extractedCandidates[index];if(!x)return;$('termType').value=x.type;$('termOriginal').value=x.original;$('termTranslation').value=x.suggested;$('termNote').value='';$('termVoice').value='';$('termOriginal').focus();setStatus(`Added to Glossary editor • ${x.original}`,true)}","function addExtractedGlossary(index){const x=extractedCandidates[index];if(!x)return;$('termType').value=x.type;$('termOriginal').value=cleanTermText(x.original);$('termTranslation').value=cleanTermText(x.suggested);$('termNote').value='';$('termVoice').value='';$('termOriginal').focus();setStatus(`Added to Glossary editor • ${x.original}`,true)}")
-          text=text.replace("async function addTerm(){if(!currentNovel)return;await api(`/api/glossary/${currentNovel.id}`,{method:'POST',body:JSON.stringify({type:$('termType').value,original:$('termOriginal').value,translation:$('termTranslation').value,note:$('termNote').value,voice:$('termVoice').value})});glossary=await api(`/api/glossary/${currentNovel.id}`);renderGlossary();['termOriginal','termTranslation','termNote','termVoice'].forEach(id=>$(id).value='')}","async function addTerm(){if(!currentNovel)return;const original=cleanTermText($('termOriginal').value),translation=cleanTermText($('termTranslation').value);if(!original||!translation)return alert('Original and Myanmar name are required.');await api(`/api/glossary/${currentNovel.id}`,{method:'POST',body:JSON.stringify({type:$('termType').value,original,translation,note:$('termNote').value.trim(),voice:$('termVoice').value.trim()})});glossary=await api(`/api/glossary/${currentNovel.id}`);renderGlossary();['termOriginal','termTranslation','termNote','termVoice'].forEach(id=>$(id).value='')}")
-          app.write_text(text,encoding='utf-8')
-          index=Path('public/index.html'); text=index.read_text(encoding='utf-8')
-          old='''  <section class="card">
-    <h2>Extracted Glossary — Not saved automatically</h2>
-    <div id="extractedGlossary" class="muted">No extraction yet.</div>
-  </section>
-
-  <section class="card">
-    <h2>Glossary / Character Voice</h2>
-    <div class="grid">
-      <select id="termType">
-        <option value="characters">Character</option>
-        <option value="items">Item</option>
-        <option value="locations">Location</option>
-        <option value="organizations">Organization</option>
-        <option value="skills">Skill</option>
-        <option value="other">Other</option>
-      </select>
-      <input id="termOriginal" placeholder="Original">
-      <input id="termTranslation" placeholder="Established Myanmar name">
-      <input id="termNote" placeholder="Note">
-      <input id="termVoice" placeholder="Character voice (optional)">
-    </div>
-    <button id="addTermBtn">Add / Update</button>
-    <div id="glossary"></div>
-  </section>'''
-          new='''  <section class="glossaryLayout">
-    <section class="card glossaryPanel">
-      <h2>AI #2 — Important Glossary</h2>
-      <p class="muted">Not saved automatically • only important / potentially recurring entities</p>
-      <div id="extractedGlossary" class="muted">No extraction yet.</div>
-    </section>
-    <section class="card glossaryPanel">
-      <h2>Database Glossary / Character Voice</h2>
-      <div class="grid">
-        <select id="termType"><option value="characters">Character</option><option value="items">Item</option><option value="locations">Location</option><option value="organizations">Organization</option><option value="skills">Skill</option><option value="other">Other</option></select>
-        <input id="termOriginal" placeholder="Original">
-        <input id="termTranslation" placeholder="Established Myanmar name">
-        <input id="termNote" placeholder="Note">
-        <input id="termVoice" placeholder="Character voice (optional)">
-      </div>
-      <button id="addTermBtn">Add / Update</button>
-      <div id="glossary"></div>
-    </section>
-  </section>'''
-          if old not in text: raise SystemExit('glossary HTML not found')
-          index.write_text(text.replace(old,new,1),encoding='utf-8')
-          css=Path('public/style.css'); text=css.read_text(encoding='utf-8')
-          if '.glossaryLayout{' not in text: text += '.glossaryLayout{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px;align-items:start}.glossaryPanel{margin:7px 0;min-width:0}.glossaryPanel h2{margin:2px 0 4px}.glossaryPanel .term{margin:4px 0;padding:7px}.glossaryPanel .term b{padding-right:55px;overflow-wrap:anywhere}.glossaryPanel .term small{display:block;margin-top:3px}@media(max-width:1000px){.glossaryLayout{grid-template-columns:1fr}}'
-          css.write_text(text,encoding='utf-8')
+          p.write_text(text,encoding='utf-8')
           PY
+          node --check server.mjs
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add server.mjs public/app.js public/index.html public/style.css
+          git add server.mjs
           git rm .github/workflows/one-time-glossary-update.yml
-          git commit -m "Improve AI2 glossary selection and layout"
+          git commit -m "Harden Name Lock matching and restoration"
           git push
