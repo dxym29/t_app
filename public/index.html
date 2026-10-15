@@ -73,29 +73,32 @@
     <div id="status"></div>
   </section>
 
-  <section class="card">
-    <h2>Extracted Glossary — Not saved automatically</h2>
-    <div id="extractedGlossary" class="muted">No extraction yet.</div>
-  </section>
+  <section class="glossaryLayout">
+    <section class="card glossaryPanel">
+      <h2>AI #2 — Important Glossary</h2>
+      <p class="muted">Not saved automatically • only important / potentially recurring entities</p>
+      <div id="extractedGlossary" class="muted">No extraction yet.</div>
+    </section>
 
-  <section class="card">
-    <h2>Glossary / Character Voice</h2>
-    <div class="grid">
-      <select id="termType">
-        <option value="characters">Character</option>
-        <option value="items">Item</option>
-        <option value="locations">Location</option>
-        <option value="organizations">Organization</option>
-        <option value="skills">Skill</option>
-        <option value="other">Other</option>
-      </select>
-      <input id="termOriginal" placeholder="Original">
-      <input id="termTranslation" placeholder="Established Myanmar name">
-      <input id="termNote" placeholder="Note">
-      <input id="termVoice" placeholder="Character voice (optional)">
-    </div>
-    <button id="addTermBtn">Add / Update</button>
-    <div id="glossary"></div>
+    <section class="card glossaryPanel">
+      <h2>Database Glossary / Character Voice</h2>
+      <div class="grid">
+        <select id="termType">
+          <option value="characters">Character</option>
+          <option value="items">Item</option>
+          <option value="locations">Location</option>
+          <option value="organizations">Organization</option>
+          <option value="skills">Skill</option>
+          <option value="other">Other</option>
+        </select>
+        <input id="termOriginal" placeholder="Original">
+        <input id="termTranslation" placeholder="Established Myanmar name">
+        <input id="termNote" placeholder="Note">
+        <input id="termVoice" placeholder="Character voice (optional)">
+      </div>
+      <button id="addTermBtn">Add / Update</button>
+      <div id="glossary"></div>
+    </section>
   </section>
 
   <section class="card">
