@@ -1,0 +1,154 @@
+name: One-time glossary UI and prompt update
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply glossary improvements
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          server = Path('server.mjs')
+          text = server.read_text(encoding='utf-8')
+          new_prompt = r'''function glossaryPrompt(source){return `You are an IMPORTANT STORY ENTITY DETECTOR for a web-novel translation system. Your job is NOT to list everything that appears in the chapter. Your job is to identify only named entities and story terms that are important enough to remember for consistent translation across later episodes.
+
+PRIMARY GOAL:
+Extract the small, high-value glossary set: major characters, recurring or potentially recurring supporting characters, important items, recurring or story-important locations, and important organizations. Prefer quality over quantity. When uncertain, OMIT the term.
+
+CATEGORIES:
+1. Character
+2. Item
+3. Organization
+4. Location
+
+SELECTION RULES:
+- Extract only terms that actually appear in the SOURCE.
+- Prioritize main characters and characters who clearly interact with the story, have a role, relationship, title, ability, conflict, or other reason they may return later.
+- Include named supporting characters when they seem story-relevant or likely to matter again. Do NOT extract every passerby or one-scene minor person.
+- Extract important named items, weapons, artifacts, books, tools, medicines, treasures, or other objects that have a story role, special identity, power, ownership, or may be referenced again.
+- Extract locations that are named, plot-relevant, distinctive, or likely to recur. Do NOT extract ordinary places such as a room, road, table, shop, house, or street unless the place itself is a named or important story location.
+- Extract organizations, clans, sects, groups, companies, kingdoms, schools, factions, or similar named entities when they matter to the story.
+- If a term appears only as a passing detail and has little reason to be remembered later, leave it out.
+- If you are unsure whether a term is important or likely to recur, leave it out.
+- Never invent future recurrence. Judge only from evidence in the current SOURCE.
+- If the same entity appears multiple times, output it once.
+- Keep the original term clean: remove accidental leading/trailing whitespace and collapse repeated spaces or line breaks inside the term.
+- Do not translate the story or summarize the chapter.
+- Suggested Myanmar names should be concise, natural, and suitable for a web-novel glossary. They are suggestions only.
+- Return JSON only. No markdown and no explanation.
+
+FORMAT:
+{
+  "characters":[{"original":"...","suggested":"..."}],
+  "items":[{"original":"...","suggested":"..."}],
+  "organizations":[{"original":"...","suggested":"..."}],
+  "locations":[{"original":"...","suggested":"..."}]
+}
+
+SOURCE:
+${source}`}
+'''
+          pattern = r"function glossaryPrompt\(source\)\{return `.*?`\}\nfunction polishPrompt"
+          replacement = new_prompt + "function polishPrompt"
+          updated, count = re.subn(pattern, replacement, text, count=1, flags=re.S)
+          if count != 1:
+              raise SystemExit('Could not locate glossaryPrompt in server.mjs; no server change made.')
+          server.write_text(updated, encoding='utf-8')
+
+          app = Path('public/app.js')
+          text = app.read_text(encoding='utf-8')
+          text = text.replace("function charCount(text=''){return Array.from(String(text)).length}", "function charCount(text=''){return Array.from(String(text)).length}\nfunction cleanTermText(text=''){return String(text??'').replace(/\\s+/g,' ').trim()}")
+          old = "function renderExtracted(g){extractedCandidates=[];const rows=[];for(const type of ['characters','items','organizations','locations'])for(const x of g[type]||[]){const index=extractedCandidates.length;extractedCandidates.push({type,original:String(x.original||''),suggested:String(x.suggested||'')});rows.push(`<div class=\"term\"><button type=\"button\" onclick=\"addExtractedGlossary(${index})\">Add</button><b>${esc(x.original||'')} → ${esc(x.suggested||'')}</b><small>${esc(type)}</small></div>`)}$('extractedGlossary').innerHTML=rows.length?rows.join(''):'No named entities found.'}"
+          new = "function renderExtracted(g){extractedCandidates=[];const rows=[];for(const type of ['characters','items','organizations','locations'])for(const x of g[type]||[]){const index=extractedCandidates.length;const original=cleanTermText(x.original),suggested=cleanTermText(x.suggested);if(!original)continue;extractedCandidates.push({type,original,suggested});rows.push(`<div class=\"term\"><button type=\"button\" onclick=\"addExtractedGlossary(${index})\">Add</button><b>${esc(original)} → ${esc(suggested)}</b><small>${esc(type)}</small></div>`)}$('extractedGlossary').innerHTML=rows.length?rows.join(''):'No important recurring entities found.'}"
+          if old not in text:
+              raise SystemExit('Could not locate renderExtracted in public/app.js')
+          text = text.replace(old, new, 1)
+          old = "function addExtractedGlossary(index){const x=extractedCandidates[index];if(!x)return;$('termType').value=x.type;$('termOriginal').value=x.original;$('termTranslation').value=x.suggested;$('termNote').value='';$('termVoice').value='';$('termOriginal').focus();setStatus(`Added to Glossary editor • ${x.original}`,true)}"
+          new = "function addExtractedGlossary(index){const x=extractedCandidates[index];if(!x)return;$('termType').value=x.type;$('termOriginal').value=cleanTermText(x.original);$('termTranslation').value=cleanTermText(x.suggested);$('termNote').value='';$('termVoice').value='';$('termOriginal').focus();setStatus(`Added to Glossary editor • ${x.original}`,true)}"
+          if old not in text:
+              raise SystemExit('Could not locate addExtractedGlossary in public/app.js')
+          text = text.replace(old, new, 1)
+          old = "async function addTerm(){if(!currentNovel)return;await api(`/api/glossary/${currentNovel.id}`,{method:'POST',body:JSON.stringify({type:$('termType').value,original:$('termOriginal').value,translation:$('termTranslation').value,note:$('termNote').value,voice:$('termVoice').value})});glossary=await api(`/api/glossary/${currentNovel.id}`);renderGlossary();['termOriginal','termTranslation','termNote','termVoice'].forEach(id=>$(id).value='')}"
+          new = "async function addTerm(){if(!currentNovel)return;const original=cleanTermText($('termOriginal').value),translation=cleanTermText($('termTranslation').value);if(!original||!translation)return alert('Original and Myanmar name are required.');await api(`/api/glossary/${currentNovel.id}`,{method:'POST',body:JSON.stringify({type:$('termType').value,original,translation,note:$('termNote').value.trim(),voice:$('termVoice').value.trim()})});glossary=await api(`/api/glossary/${currentNovel.id}`);renderGlossary();['termOriginal','termTranslation','termNote','termVoice'].forEach(id=>$(id).value='')}"
+          if old not in text:
+              raise SystemExit('Could not locate addTerm in public/app.js')
+          text = text.replace(old, new, 1)
+          app.write_text(text, encoding='utf-8')
+
+          index = Path('public/index.html')
+          text = index.read_text(encoding='utf-8')
+          old = '''  <section class="card">
+    <h2>Extracted Glossary — Not saved automatically</h2>
+    <div id="extractedGlossary" class="muted">No extraction yet.</div>
+  </section>
+
+  <section class="card">
+    <h2>Glossary / Character Voice</h2>
+    <div class="grid">
+      <select id="termType">
+        <option value="characters">Character</option>
+        <option value="items">Item</option>
+        <option value="locations">Location</option>
+        <option value="organizations">Organization</option>
+        <option value="skills">Skill</option>
+        <option value="other">Other</option>
+      </select>
+      <input id="termOriginal" placeholder="Original">
+      <input id="termTranslation" placeholder="Established Myanmar name">
+      <input id="termNote" placeholder="Note">
+      <input id="termVoice" placeholder="Character voice (optional)">
+    </div>
+    <button id="addTermBtn">Add / Update</button>
+    <div id="glossary"></div>
+  </section>'''
+          new = '''  <section class="glossaryLayout">
+    <section class="card glossaryPanel">
+      <h2>AI #2 — Important Glossary</h2>
+      <p class="muted">Not saved automatically • only important / potentially recurring entities</p>
+      <div id="extractedGlossary" class="muted">No extraction yet.</div>
+    </section>
+
+    <section class="card glossaryPanel">
+      <h2>Database Glossary / Character Voice</h2>
+      <div class="grid">
+        <select id="termType">
+          <option value="characters">Character</option>
+          <option value="items">Item</option>
+          <option value="locations">Location</option>
+          <option value="organizations">Organization</option>
+          <option value="skills">Skill</option>
+          <option value="other">Other</option>
+        </select>
+        <input id="termOriginal" placeholder="Original">
+        <input id="termTranslation" placeholder="Established Myanmar name">
+        <input id="termNote" placeholder="Note">
+        <input id="termVoice" placeholder="Character voice (optional)">
+      </div>
+      <button id="addTermBtn">Add / Update</button>
+      <div id="glossary"></div>
+    </section>
+  </section>'''
+          if old not in text:
+              raise SystemExit('Could not locate glossary sections in public/index.html')
+          index.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          css = Path('public/style.css')
+          text = css.read_text(encoding='utf-8')
+          text += '.glossaryLayout{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px;align-items:start}.glossaryPanel{margin:7px 0;min-width:0}.glossaryPanel h2{margin:2px 0 4px}.glossaryPanel .term{margin:4px 0;padding:7px}.glossaryPanel .term b{padding-right:55px;overflow-wrap:anywhere}.glossaryPanel .term small{display:block;margin-top:3px}@media(max-width:1000px){.glossaryLayout{grid-template-columns:1fr}}'
+          css.write_text(text, encoding='utf-8')
+          PY
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server.mjs public/app.js public/index.html public/style.css
+          git rm .github/workflows/one-time-glossary-update.yml
+          git commit -m "Improve AI2 glossary selection and layout"
+          git push
