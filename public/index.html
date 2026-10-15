@@ -74,11 +74,12 @@
   </section>
 
   <section class="card">
-    <h2>Backup / Move to a New Database</h2>
-    <p class="muted">Export a novel or all data before changing Supabase projects. Import works after the new database is initialized.</p>
+    <h2>Website Export / Backup</h2>
+    <p class="muted">Export the selected novel as the exact MM Novel workbook format for direct upload to the publishing website. JSON backup remains available for database moves.</p>
     <div class="row">
-      <button id="exportNovelBtn">Export Current Novel</button>
-      <button id="exportAllBtn">Export All</button>
+      <button id="exportTemplateBtn" class="primary">Export Website Excel</button>
+      <button id="exportNovelBtn">Export JSON Backup</button>
+      <button id="exportAllBtn">Export All JSON</button>
       <label class="fileBtn">Import Backup<input id="importFile" type="file" accept=".json" hidden></label>
     </div>
   </section>
