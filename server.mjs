@@ -135,34 +135,14 @@ async function buildTemplateWorkbook(novelId){
   guide.addRow(['Import','Use .xlsx files. Keep all sheet names and column headers unchanged. Import creates a new novel; it will not overwrite an existing novel.']);
   const ns=wb.addWorksheet('Novel');
   ns.addRow(['field','value']);
-  const novelFields=[
-    ['title',excelValue(novel.name)],
-    ['slug',slugify(novel.name)],
-    ['originalTitle',''],['author',''],['description',''],['coverUrl',''],
-    ['sourceLanguage','zh'],['translationGenre','general'],['translationTone','natural'],['translationNamePolicy','consistent'],
-    ['translationInstructions',excelValue(novel.style)],['status','draft'],['isPublished','FALSE'],['genres','']
-  ];
+  const novelFields=[['title',excelValue(novel.name)],['slug',slugify(novel.name)],['originalTitle',''],['author',''],['description',''],['coverUrl',''],['sourceLanguage','zh'],['translationGenre','general'],['translationTone','natural'],['translationNamePolicy','consistent'],['translationInstructions',excelValue(novel.style)],['status','draft'],['isPublished','FALSE'],['genres','']];
   for(const row of novelFields)ns.addRow(row);
   const cs=wb.addWorksheet('Chapters');
   cs.addRow(['chapterNo','title','sourceLanguage','sourceContent','translatedTitle','translatedContent','publishImmediately']);
-  for(const e of episodes){
-    const translated=excelValue(e.translation);
-    cs.addRow([e.number,excelValue(e.title),'zh',excelValue(e.source),excelValue(e.title),translated,translated.trim()?'TRUE':'FALSE']);
-  }
+  for(const e of episodes){const translated=excelValue(e.translation);cs.addRow([e.number,excelValue(e.title),'zh',excelValue(e.source),excelValue(e.title),translated,translated.trim()?'TRUE':'FALSE']);}
   const gs=wb.addWorksheet('Glossary');
   gs.addRow(['sourceTerm','translatedTerm','termType','note','characterVoice']);
   for(const x of glossary)gs.addRow([excelValue(x.original),excelValue(x.translation),excelValue(x.type),excelValue(x.note),excelValue(x.voice)]);
-  for(const ws of [guide,ns,cs,gs]){
-    ws.views=[{state:'frozen',ySplit:1}];
-    ws.getRow(1).font={bold:true};
-    ws.getRow(1).alignment={vertical:'middle'};
-    ws.autoFilter={from:1,to:ws.columnCount,row:1};
-    for(const c of ws.columns)c.width=Math.min(Math.max((c.header?String(c.header).length:12)+4,12),40);
-  }
-  ns.getColumn(1).width=28;ns.getColumn(2).width=60;
-  cs.getColumn(1).width=12;cs.getColumn(2).width=30;cs.getColumn(3).width=18;cs.getColumn(4).width=60;cs.getColumn(5).width=30;cs.getColumn(6).width=70;cs.getColumn(7).width=20;
-  gs.getColumn(1).width=30;gs.getColumn(2).width=30;gs.getColumn(3).width=20;gs.getColumn(4).width=50;gs.getColumn(5).width=30;
-  cs.eachRow({includeEmpty:false},row=>row.eachCell({includeEmpty:false},cell=>{cell.alignment={vertical:'top',wrapText:true}}));
   return wb;
 }
 app.get('/api/export/template/:id',async(req,res)=>{
