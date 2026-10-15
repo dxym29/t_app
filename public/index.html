@@ -40,17 +40,28 @@
   <section class="card">
     <label>Original</label>
     <textarea id="source" class="big" placeholder="Paste the complete source chapter here..."></textarea>
-    <button id="translateBtn" class="primary">Translate</button>
+    <div class="row">
+      <button id="translateBtn" class="primary">Translate</button>
+      <button id="extractGlossaryBtn">Extract Glossary</button>
+    </div>
+    <div id="sourceStats" class="muted"></div>
     <div id="status"></div>
   </section>
 
   <section class="card">
-    <label>Myanmar Translation</label>
+    <label>Myanmar Translation — Pass 1</label>
     <textarea id="translation" class="big"></textarea>
+    <div id="pass1Stats" class="muted"></div>
     <div class="row">
+      <button id="polishBtn" class="primary">Polish Myanmar</button>
       <button id="copyBtn">Copy</button>
       <button id="saveEpisodeBtn">Save Episode</button>
     </div>
+  </section>
+
+  <section class="card">
+    <h2>Extracted Glossary — Not saved automatically</h2>
+    <div id="extractedGlossary" class="muted">No extraction yet.</div>
   </section>
 
   <section class="card">
