@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import crypto from 'crypto';
+import ExcelJS from 'exceljs';
 import { GoogleGenAI } from '@google/genai';
 import { createClient } from '@supabase/supabase-js';
 
@@ -67,44 +68,7 @@ function glossaryText(g){
   return lines.join('\n')||'(none)';
 }
 function masterPrompt({style,glossary,source,previousTail,sourceContext}){
-return `You are a professional Myanmar webnovel translator.
-
-TASK:
-Translate the COMPLETE SOURCE into natural, polished Myanmar literary prose.
-
-ABSOLUTE RULES:
-- NEVER summarize, shorten, condense, skip, merge away, or omit source content.
-- Translate every action, description, thought, emotion, reaction, relationship, setting detail, and dialogue.
-- Do not invent facts, actions, motives, dialogue, names, items, events, or explanations.
-- Keep the exact story order and cause/effect.
-- Preserve paragraph and scene structure when practical.
-- Narration must read as smooth Myanmar literary prose, not awkward word-for-word translation.
-- Dialogue must sound like spoken Myanmar and reflect the speaker's personality, relationship, social status, and current emotion.
-- Do not make every character speak with the same voice.
-- Angry, frightened, sarcastic, cold, gentle, embarrassed, arrogant, playful, and desperate moods should sound different.
-- Narration and dialogue should feel stylistically distinct where appropriate.
-- The glossary below is authoritative. If a name/term is established there, use EXACTLY that Myanmar form.
-- Preserve titles, ranks, relationships, organizations, skills, items, and place names consistently.
-- The CONTEXT section is for continuity only. NEVER translate or repeat it as part of the SOURCE.
-- Translate ONLY the SOURCE section.
-- Do not add translator notes, explanations, summaries, headings, or comments.
-- Return ONLY the Myanmar translation.
-- Accuracy before elegance, but the final Myanmar must be natural.
-
-NOVEL-LEVEL STYLE:
-${style||'(No extra style rules.)'}
-
-AUTHORITATIVE GLOSSARY:
-${glossaryText(glossary)}
-
-PREVIOUS TRANSLATED TAIL FOR CONTINUITY ONLY:
-${previousTail||'(none)'}
-
-SOURCE CONTEXT OVERLAP FOR CONTINUITY ONLY:
-${sourceContext||'(none)'}
-
-SOURCE:
-${source}`;
+return `You are a professional Myanmar webnovel translator.\n\nTASK:\nTranslate the COMPLETE SOURCE into natural, polished Myanmar literary prose.\n\nABSOLUTE RULES:\n- NEVER summarize, shorten, condense, skip, merge away, or omit source content.\n- Translate every action, description, thought, emotion, reaction, relationship, setting detail, and dialogue.\n- Do not invent facts, actions, motives, dialogue, names, items, events, or explanations.\n- Keep the exact story order and cause/effect.\n- Preserve paragraph and scene structure when practical.\n- Narration must read as smooth Myanmar literary prose, not awkward word-for-word translation.\n- Dialogue must sound like spoken Myanmar and reflect the speaker's personality, relationship, social status, and current emotion.\n- Do not make every character speak with the same voice.\n- Angry, frightened, sarcastic, cold, gentle, embarrassed, arrogant, playful, and desperate moods should sound different.\n- Narration and dialogue should feel stylistically distinct where appropriate.\n- The glossary below is authoritative. If a name/term is established there, use EXACTLY that Myanmar form.\n- Preserve titles, ranks, relationships, organizations, skills, items, and place names consistently.\n- The CONTEXT section is for continuity only. NEVER translate or repeat it as part of the SOURCE.\n- Translate ONLY the SOURCE section.\n- Do not add translator notes, explanations, summaries, headings, or comments.\n- Return ONLY the Myanmar translation.\n- Accuracy before elegance, but the final Myanmar must be natural.\n\nNOVEL-LEVEL STYLE:\n${style||'(No extra style rules.)'}\n\nAUTHORITATIVE GLOSSARY:\n${glossaryText(glossary)}\n\nPREVIOUS TRANSLATED TAIL FOR CONTINUITY ONLY:\n${previousTail||'(none)'}\n\nSOURCE CONTEXT OVERLAP FOR CONTINUITY ONLY:\n${sourceContext||'(none)'}\n\nSOURCE:\n${source}`;
 }
 
 async function getGlossary(novelId){
@@ -152,6 +116,65 @@ app.post('/api/translate',async(req,res)=>{
   if(episodeId)await q(supabase.from('episodes').update({source,translation:result,model:modelUsed,status:'translated',updated_at:new Date().toISOString()}).eq('id',episodeId).eq('novel_id',novelId));
   res.json({translation:result,model:modelUsed});
  }catch(e){fail(res,e)}
+});
+
+function slugify(value){return String(value||'novel').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Za-z0-9]+/g,'-').replace(/^-+|-+$/g,'').toLowerCase()||'novel'}
+function excelValue(value){return value==null?'':String(value)}
+async function buildTemplateWorkbook(novelId){
+  const novel=await q(supabase.from('novels').select('*').eq('id',novelId).single());
+  const glossary=await q(supabase.from('glossary_terms').select('*').eq('novel_id',novelId).order('created_at'));
+  const episodes=await q(supabase.from('episodes').select('*').eq('novel_id',novelId).order('number'));
+  const wb=new ExcelJS.Workbook();
+  wb.creator='Webnovel Translator';
+  wb.created=new Date();
+  const guide=wb.addWorksheet('Guide');
+  guide.addRow(['MM Novel workbook','Guidance']);
+  guide.addRow(['Novel sheet','Keep the field/value columns. Add one value per field. Slug must use Latin letters. Existing genre names may be separated with |.']);
+  guide.addRow(['Chapters sheet','One chapter per row. Keep chapterNo unique. Enter sourceContent, translatedContent, or both. Set publishImmediately to TRUE only when the Burmese translation is ready to publish.']);
+  guide.addRow(['Glossary sheet','One term per row. sourceTerm and translatedTerm are required; add character voice, cultivation level, realm, or notes in the other columns.']);
+  guide.addRow(['Import','Use .xlsx files. Keep all sheet names and column headers unchanged. Import creates a new novel; it will not overwrite an existing novel.']);
+  const ns=wb.addWorksheet('Novel');
+  ns.addRow(['field','value']);
+  const novelFields=[
+    ['title',excelValue(novel.name)],
+    ['slug',slugify(novel.name)],
+    ['originalTitle',''],['author',''],['description',''],['coverUrl',''],
+    ['sourceLanguage','zh'],['translationGenre','general'],['translationTone','natural'],['translationNamePolicy','consistent'],
+    ['translationInstructions',excelValue(novel.style)],['status','draft'],['isPublished','FALSE'],['genres','']
+  ];
+  for(const row of novelFields)ns.addRow(row);
+  const cs=wb.addWorksheet('Chapters');
+  cs.addRow(['chapterNo','title','sourceLanguage','sourceContent','translatedTitle','translatedContent','publishImmediately']);
+  for(const e of episodes){
+    const translated=excelValue(e.translation);
+    cs.addRow([e.number,excelValue(e.title), 'zh', excelValue(e.source), excelValue(e.title), translated, translated.trim()?'TRUE':'FALSE']);
+  }
+  const gs=wb.addWorksheet('Glossary');
+  gs.addRow(['sourceTerm','translatedTerm','termType','note','characterVoice']);
+  for(const x of glossary)gs.addRow([excelValue(x.original),excelValue(x.translation),excelValue(x.type),excelValue(x.note),excelValue(x.voice)]);
+  for(const ws of [guide,ns,cs,gs]){
+    ws.views=[{state:'frozen',ySplit:1}];
+    ws.getRow(1).font={bold:true};
+    ws.getRow(1).alignment={vertical:'middle'};
+    ws.autoFilter={from:1,to:ws.columnCount,row:1};
+    for(const c of ws.columns)c.width=Math.min(Math.max((c.header?String(c.header).length:12)+4,12),40);
+  }
+  ns.getColumn(1).width=28;ns.getColumn(2).width=60;
+  cs.getColumn(1).width=12;cs.getColumn(2).width=30;cs.getColumn(3).width=18;cs.getColumn(4).width=60;cs.getColumn(5).width=30;cs.getColumn(6).width=70;cs.getColumn(7).width=20;
+  gs.getColumn(1).width=30;gs.getColumn(2).width=30;gs.getColumn(3).width=20;gs.getColumn(4).width=50;gs.getColumn(5).width=30;
+  for(const row of cs.getRows(2,cs.rowCount))for(const cell of row.cells)cell.alignment={vertical:'top',wrapText:true};
+  return wb;
+}
+app.get('/api/export/template/:id',async(req,res)=>{
+  try{
+    const wb=await buildTemplateWorkbook(req.params.id);
+    const buffer=await wb.xlsx.writeBuffer();
+    const novel=await q(supabase.from('novels').select('name').eq('id',req.params.id).single());
+    const filename=`${slugify(novel.name)}-mm-novel.xlsx`;
+    res.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition',`attachment; filename="${filename}"`);
+    res.send(Buffer.from(buffer));
+  }catch(e){fail(res,e)}
 });
 
 async function exportNovel(novelId){const novel=await q(supabase.from('novels').select('*').eq('id',novelId).single());const glossary=await q(supabase.from('glossary_terms').select('*').eq('novel_id',novelId));const episodes=await q(supabase.from('episodes').select('*').eq('novel_id',novelId).order('number'));return {version:2,exportedAt:new Date().toISOString(),novels:[novel],glossary,episodes};}
