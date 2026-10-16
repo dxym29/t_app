@@ -24,7 +24,7 @@ async function fetchText(url,headers={},timeout=20000){
   try{const response=await fetch(url,{headers,signal:controller.signal,redirect:'follow'});const text=await response.text();return{response,text};}
   finally{clearTimeout(timer)}
 }
-const headers={'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155 Safari/537.36','Accept':'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8','Accept-Language':'en-US,en;q=0.9'};
+const headers={'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155 Safari/537.36','Accept':'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8','Accept-Language':'en-US,en;q=0.9','X-Requested-With':'XMLHttpRequest'};
 const jinaHeaders={'User-Agent':'Mozilla/5.0','Accept':'text/plain,text/html;q=0.9,*/*;q=0.8'};
 async function fetchPage(url){
   try{const r=await fetchText(url,headers,12000);if(r.response.ok&&r.text.trim())return r;}catch{}
@@ -40,32 +40,64 @@ async function fetchChapterDirect(url){
 function firstLine(text){return String(text||'').split('\n').map(cleanText).find(Boolean)||''}
 function addLinksFromHtml(html,page,found){
   const $=cheerio.load(html);
-  $('a[href]').each((_,el)=>{const href=$(el).attr('href');if(!href)return;try{const u=new URL(href,page),n=chapterNumberFromUrl(u.toString());if(n!==null){const clean=u.toString().split('#')[0];found.set(clean,{url:clean,number:n,title:cleanText($(el).text())||`Chapter ${n}`})}}catch{}});
+  $('a[href]').each((_,el)=>{const href=$(el).attr('href');if(!href)return;try{const u=new URL(href,page),n=chapterNumberFromUrl(u.toString());if(n!==null&&looksLikeNovelPing(u.toString())){const clean=u.toString().split('#')[0];found.set(clean,{url:clean,number:n,title:cleanText($(el).text())||`Chapter ${n}`})}}catch{}});
   const raw=String(html);
-  for(const m of raw.matchAll(/\/book\/[^"'\s<>?#]+\/chapter-(\d+)(?:[^"'\s<>#]*)?/gi)){try{const u=new URL(m[0],page),n=Number(m[1]),clean=u.toString().split('#')[0];found.set(clean,{url:clean,number:n,title:`Chapter ${n}`})}catch{}}
+  for(const m of raw.matchAll(/\/book\/[^"'\s<>?#]+\/chapter-(\d+)(?:[^"'\s<>#]*)?/gi)){
+    try{const u=new URL(m[0],page),n=Number(m[1]),clean=u.toString().split('#')[0];found.set(clean,{url:clean,number:n,title:`Chapter ${n}`})}catch{}
+  }
+}
+function extractNovelId(html){
+  const $=cheerio.load(html);
+  const selectors=['[data-novel-id]','#rating[data-novel-id]','[data-book-id]'];
+  for(const selector of selectors){const el=$(selector).first();if(el.length){const id=el.attr('data-novel-id')||el.attr('data-book-id');if(id&&/^\d+$/.test(String(id)))return String(id)}}
+  const raw=String(html);
+  const patterns=[/data-novel-id=["'](\d+)["']/i,/data-book-id=["'](\d+)["']/i,/novelId["']?\s*[:=]\s*["']?(\d+)/i,/novel_id["']?\s*[:=]\s*["']?(\d+)/i];
+  for(const re of patterns){const m=raw.match(re);if(m)return m[1]}
+  return null;
+}
+function addArchiveLinks(html,page,found){
+  const $=cheerio.load(html);
+  const selectors=['li[data-chapter-item] a[href]','.list-chapter li a[href]','.chapter-list a[href]','a[href]'];
+  for(const selector of selectors){
+    $(selector).each((_,el)=>{
+      const href=$(el).attr('href');if(!href)return;
+      try{
+        const u=new URL(href,page),n=chapterNumberFromUrl(u.toString());
+        if(n===null||!looksLikeNovelPing(u.toString()))return;
+        const clean=u.toString().split('#')[0];
+        found.set(clean,{url:clean,number:n,title:cleanText($(el).text())||`Chapter ${n}`});
+      }catch{}
+    });
+    if(found.size)break;
+  }
+  addLinksFromHtml(html,page,found);
+}
+async function fetchAjaxArchive(seriesUrl,found){
+  const page=await fetchPage(seriesUrl);if(!page)return null;
+  const novelId=extractNovelId(page.text);if(!novelId)return null;
+  const base=new URL(seriesUrl).origin;
+  const archiveUrl=`${base}/ajax/chapter-archive?novelId=${encodeURIComponent(novelId)}`;
+  try{
+    const r=await fetchText(archiveUrl,{...headers,'Referer':seriesUrl,'X-Requested-With':'XMLHttpRequest'},15000);
+    if(r.response.ok&&r.text.trim()){
+      addArchiveLinks(r.text,seriesUrl,found);
+      if(found.size>=100){console.log(`NovelPing AJAX archive found ${found.size} chapters (novelId ${novelId}).`);return{novelId,count:found.size}}
+    }
+  }catch{}
+  try{
+    const r=await fetchText(`https://r.jina.ai/${archiveUrl}`,jinaHeaders,15000);
+    if(r.response.ok&&r.text.trim()){
+      addArchiveLinks(r.text,seriesUrl,found);
+      if(found.size>=100)return{novelId,count:found.size}
+    }
+  }catch{}
+  return found.size?{novelId,count:found.size}:null;
 }
 function chapterNavigationLinks(html,page,currentNumber){
   const $=cheerio.load(html),out=new Set();
   const add=(href)=>{if(!href)return;try{const u=new URL(href,page),n=chapterNumberFromUrl(u.toString());if(n!==null&&looksLikeNovelPing(u.toString()))out.add(u.toString().split('#')[0])}catch{}};
-  // NovelPing chapter navigation can be icon-only and marked with data-chapter-nav.
-  $('[data-chapter-nav]').each((_,el)=>{
-    const nav=String($(el).attr('data-chapter-nav')||'').toLowerCase();
-    const href=$(el).attr('href')||$(el).attr('data-chapter-url')||$(el).attr('data-url');
-    if(/prev|previous|next|older|newer/.test(nav))add(href);
-  });
-  $('a[href]').each((_,el)=>{
-    const href=$(el).attr('href');if(!href)return;
-    const text=cleanText($(el).text()).toLowerCase(),rel=String($(el).attr('rel')||'').toLowerCase(),aria=String($(el).attr('aria-label')||'').toLowerCase(),title=String($(el).attr('title')||'').toLowerCase(),cls=String($(el).attr('class')||'').toLowerCase(),nav=String($(el).attr('data-chapter-nav')||'').toLowerCase();
-    if(rel.includes('prev')||rel.includes('next')||/\b(previous|prev|older|newer|next)\b/i.test(`${text} ${aria} ${title} ${cls} ${nav}`)||/\bchapter\b/i.test(text))add(href);
-  });
-  // Raw HTML fallback for attributes that Cheerio may not expose as expected.
-  const raw=String(html);
-  for(const m of raw.matchAll(/<[^>]*data-chapter-nav=["']([^"']+)["'][^>]*>/gi)){
-    if(!/prev|previous|next|older|newer/i.test(m[1]))continue;
-    const tag=m[0],hm=tag.match(/\bhref=["']([^"']+)["']/i)||tag.match(/\bdata-chapter-url=["']([^"']+)["']/i)||tag.match(/\bdata-url=["']([^"']+)["']/i);
-    if(hm)add(hm[1]);
-  }
-  // Keep nearby chapter links as a fallback for icon-only navigation.
+  $('[data-chapter-nav]').each((_,el)=>{const nav=String($(el).attr('data-chapter-nav')||'').toLowerCase();const href=$(el).attr('href')||$(el).attr('data-chapter-url')||$(el).attr('data-url');if(/prev|previous|next|older|newer/.test(nav))add(href)});
+  $('a[href]').each((_,el)=>{const href=$(el).attr('href');if(!href)return;const text=cleanText($(el).text()).toLowerCase(),rel=String($(el).attr('rel')||'').toLowerCase(),aria=String($(el).attr('aria-label')||'').toLowerCase(),title=String($(el).attr('title')||'').toLowerCase(),cls=String($(el).attr('class')||'').toLowerCase(),nav=String($(el).attr('data-chapter-nav')||'').toLowerCase();if(rel.includes('prev')||rel.includes('next')||/\b(previous|prev|older|newer|next)\b/i.test(`${text} ${aria} ${title} ${cls} ${nav}`)||/\bchapter\b/i.test(text))add(href)});
   if(Number.isFinite(currentNumber))$('a[href]').each((_,el)=>{const href=$(el).attr('href');if(!href)return;try{const u=new URL(href,page),n=chapterNumberFromUrl(u.toString());if(n!==null&&Math.abs(n-currentNumber)<=2)add(href)}catch{}});
   return[...out];
 }
@@ -75,7 +107,15 @@ function paginationLinks(html,page){
   return[...out];
 }
 async function discoverSeries(url){
-  const found=new Map(),seenPages=new Set(),queue=[url];
+  const found=new Map();
+  // Primary method: NovelPing's chapter archive AJAX endpoint, which contains
+  // the complete chapter list instead of only the first ~30 links in page HTML.
+  const ajax=await fetchAjaxArchive(url,found);
+  if(ajax&&found.size>=100){
+    return[...found.values()].sort((a,b)=>a.number-b.number||a.url.localeCompare(b.url));
+  }
+
+  const seenPages=new Set(),queue=[url];
   while(queue.length&&seenPages.size<100){
     const page=queue.shift();if(seenPages.has(page))continue;seenPages.add(page);
     const r=await fetchPage(page);if(!r)continue;
@@ -83,7 +123,7 @@ async function discoverSeries(url){
     for(const next of paginationLinks(r.text,page))if(!seenPages.has(next))queue.push(next);
   }
   if(!found.size)throw new Error('NovelPing did not expose chapter pages to the server. Try a direct chapter URL first.');
-  // Never guess /chapter-N because NovelPing uses title slugs. Follow real navigation links.
+
   const chapterQueue=[...found.values()].map(x=>x.url),chapterSeen=new Set();
   let rounds=0;
   while(chapterQueue.length&&chapterSeen.size<650&&rounds<100){
