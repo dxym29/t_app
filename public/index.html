@@ -40,6 +40,11 @@
   <section class="workflow">
     <section class="card flowBox">
       <label>Original</label>
+      <div class="row">
+        <input id="chapterUrl" class="grow" placeholder="Paste NovelPing chapter URL">
+        <button id="fetchChapterBtn">Fetch Chapter</button>
+      </div>
+      <div id="fetchStatus" class="muted"></div>
       <textarea id="source" class="big" placeholder="Paste the complete source chapter here..."></textarea>
       <div class="row">
         <button id="translateBtn" class="primary">Translate</button>
