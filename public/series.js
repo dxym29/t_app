@@ -9,6 +9,23 @@
     return j;
   }
 
+  function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
+
+  async function fetchChapterWithRetry(ch){
+    let last;
+    for(let attempt=1;attempt<=3;attempt++){
+      try{
+        const data=await seriesApi('/api/fetch-chapter',{method:'POST',body:JSON.stringify({url:ch.url})});
+        if(!data.source||data.source.length<50)throw new Error('Chapter source was empty or too short.');
+        return data;
+      }catch(e){
+        last=e;
+        if(attempt<3)await sleep(2500*attempt);
+      }
+    }
+    throw last||new Error('Chapter fetch failed.');
+  }
+
   async function importSeries(){
     const url=$('chapterUrl').value.trim();
     if(!url)return alert('Paste a NovelPing chapter or series URL first.');
@@ -47,11 +64,11 @@
       for(const ch of pending){
         try{
           $('fetchStatus').textContent=`Importing Chapter ${ch.number} (${done+1}/${pending.length})...`;
-          const data=await seriesApi('/api/fetch-chapter',{method:'POST',body:JSON.stringify({url:ch.url})});
-          if(!data.source||data.source.length<50)throw new Error('Chapter source was empty or too short.');
+          const data=await fetchChapterWithRetry(ch);
           await seriesApi(`/api/episodes/${novelId}`,{method:'POST',body:JSON.stringify({number:Number(ch.number),title:data.title||ch.title||`Chapter ${ch.number}`,source:data.source,translation:''})});
           done++;
           $('fetchStatus').textContent=`Imported ${done}/${pending.length} • Chapter ${ch.number}`;
+          await sleep(350);
         }catch(e){
           failed++;
           errors.push(`Chapter ${ch.number}: ${e.message}`);
@@ -70,7 +87,6 @@
     }
   }
 
-  // Replace the original single-chapter handler with the series-aware handler.
   $('fetchChapterBtn').onclick=importSeries;
   $('chapterUrl').placeholder='Paste NovelPing chapter URL or series URL';
 })();
