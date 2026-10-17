@@ -85,7 +85,7 @@ async function fetchExportRows(table, columns, novelId, orderColumn, batchSize=2
 async function buildTemplateWorkbook(novelId){
   const novel=await q(supabase.from('novels').select('id,name,style').eq('id',novelId).single());
   const glossary=await fetchExportRows('glossary_terms','original,translation,type,note,voice',''+novelId,'created_at',100);
-  const episodes=await fetchExportRows('episodes','number,title,source,translation',''+novelId,'number',25);
+  const episodes=await fetchExportRows('episodes','number,title,source,translation',''+novelId,'number',1);
   const wb=new ExcelJS.Workbook();
   wb.creator='Webnovel Translator';
   wb.created=new Date();
