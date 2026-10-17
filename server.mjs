@@ -100,7 +100,7 @@ async function buildTemplateWorkbook(novelId){
   ns.autoFilter='A1:B1';
   const cs=wb.addWorksheet('Chapters');
   cs.addRow(['chapterNo','title','sourceLanguage','sourceContent','translatedTitle','translatedContent','publishImmediately']);
-  for(const e of episodes)cs.addRow([e.number,excelValue(e.title),'zh',excelValue(e.source),'',excelValue(e.translation),'FALSE']);
+  for(const [index,e] of episodes.entries())cs.addRow([index+1,excelValue(e.title),'zh',excelValue(e.source),'',excelValue(e.translation),'FALSE']);
   cs.columns=[{width:14},{width:28},{width:18},{width:72},{width:28},{width:72},{width:22}];
   cs.views=[{state:'frozen',ySplit:1}];
   cs.autoFilter='A1:G1';
