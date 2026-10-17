@@ -56,6 +56,7 @@ const replacement=`async function buildTemplateWorkbook(novelId){
   return wb;
 }`;
 
-const patched=source.slice(0,start)+replacement+source.slice(end);
+let patched=source.slice(0,start)+replacement+source.slice(end);
+if(!patched.startsWith("import fs from 'node:fs/promises';"))patched="import fs from 'node:fs/promises';\n"+patched;
 await fs.writeFile(runtimePath,patched,'utf8');
 await import(`./server.runtime.mjs?excelTemplate=${Date.now()}`);
