@@ -48,7 +48,7 @@ const replacement=`async function buildTemplateWorkbook(novelId){
 
   const cs=wb.addWorksheet('Chapters');
   cs.addRow(['chapterNo','title','sourceLanguage','sourceContent','translatedTitle','translatedContent','publishImmediately']);
-  for(const [index,e] of episodes.entries()){const chapterNo=Number(e.number);cs.addRow([Number.isSafeInteger(chapterNo)&&chapterNo>0?chapterNo:index+1,excelValue(e.title),'zh',excelValue(e.source),excelValue(e.title),excelValue(e.translation),Boolean(String(e.translation||'').trim())]);}
+  const usedChapterNumbers=new Set();let nextChapterNo=1;for(const e of episodes){let chapterNo=Number(e.number);if(!Number.isSafeInteger(chapterNo)||chapterNo<=0||usedChapterNumbers.has(chapterNo)){while(usedChapterNumbers.has(nextChapterNo))nextChapterNo++;chapterNo=nextChapterNo;}usedChapterNumbers.add(chapterNo);if(chapterNo>=nextChapterNo){nextChapterNo=chapterNo+1;}cs.addRow([chapterNo,excelValue(e.title),'zh',excelValue(e.source),excelValue(e.title),excelValue(e.translation),Boolean(String(e.translation||'').trim())]);}
   [14,28,18,72,28,72,22].forEach((w,i)=>cs.getColumn(i+1).width=w);cs.freezePane='A2';cs.autoFilter='A1:G1';cs.getRow(1).height=28;cs.getRow(1).eachCell(c=>Object.assign(c,headerStyle));
   for(let r=2;r<=cs.rowCount;r++)cs.getRow(r).eachCell(c=>Object.assign(c,bodyStyle));
 
