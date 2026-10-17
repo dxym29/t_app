@@ -73,10 +73,19 @@ app.post('/api/polish',async(req,res)=>{try{const {novelId,episodeId,translation
 
 function slugify(value){return String(value||'novel').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Za-z0-9]+/g,'-').replace(/^-+|-+$/g,'').toLowerCase()||'novel'}
 function excelValue(value){return value==null?'':String(value)}
+async function fetchExportRows(table, columns, novelId, orderColumn, batchSize=25){
+  const rows=[];
+  for(let start=0;;start+=batchSize){
+    const batch=await q(supabase.from(table).select(columns).eq('novel_id',novelId).order(orderColumn).range(start,start+batchSize-1));
+    rows.push(...batch);
+    if(batch.length<batchSize)break;
+  }
+  return rows;
+}
 async function buildTemplateWorkbook(novelId){
-  const novel=await q(supabase.from('novels').select('*').eq('id',novelId).single());
-  const glossary=await q(supabase.from('glossary_terms').select('*').eq('novel_id',novelId).order('created_at'));
-  const episodes=await q(supabase.from('episodes').select('*').eq('novel_id',novelId).order('number'));
+  const novel=await q(supabase.from('novels').select('id,name,style').eq('id',novelId).single());
+  const glossary=await fetchExportRows('glossary_terms','original,translation,type,note,voice',''+novelId,'created_at',100);
+  const episodes=await fetchExportRows('episodes','number,title,source,translation',''+novelId,'number',25);
   const wb=new ExcelJS.Workbook();
   wb.creator='Webnovel Translator';
   wb.created=new Date();
