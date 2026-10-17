@@ -100,14 +100,15 @@
       chapters.push(e);
     }
 
-    if(!confirm(`Run ${count} chapters: #${start}–#${start+count-1}?\n\nEach chapter will run:\n1. Pass 1 Translate\n2. Pass 2 Polish\n3. Save final result\n\nQuota/rate-limit errors stop the batch.\nOther errors retry the same phase automatically until it succeeds.`))return;
+    if(!confirm(`Run ${count} chapters: #${start}–#${start+count-1}?\n\nEach chapter will run:\n1. Pass 1 Translate\n2. Pass 2 Polish\n3. Save final result\n\nQuota/rate-limit errors stop the batch.\nOther Phase 1 errors retry automatically until success.\nAny Phase 2 error is skipped and Pass 1 is saved.`))return;
 
     const btn=$('batchBtn');
     btn.disabled=true;
     await requestNotifications();
     $('batchStatus').textContent=`Starting batch • ${count} chapters`;
 
-    let completed=0;
+    let completed=0,polishSkipped=0;
+    const polishErrors=[];
 
     try{
       for(let i=0;i<chapters.length;i++){
@@ -123,7 +124,7 @@
           throw new Error(`${label}: source is empty. Batch stopped.`);
         }
 
-        // Phase 1 — existing translation endpoint. Non-quota errors retry forever.
+        // Phase 1 — non-quota errors retry forever; quota/rate-limit stops the batch.
         $('batchStatus').textContent=`${label} • Phase 1 Translate...`;
         const p1=await runUntilSuccess(label,'Phase 1 Translate',()=>api('/api/translate',{
           method:'POST',
@@ -135,18 +136,28 @@
         updateStats();
         if(!String(p1.translation||'').trim())throw new Error(`${label}: Phase 1 returned empty translation.`);
 
-        // Phase 2 — existing polish endpoint. Non-quota errors retry forever.
-        $('batchStatus').textContent=`${label} • Phase 2 Polish...`;
-        const p2=await runUntilSuccess(label,'Phase 2 Polish',()=>api('/api/polish',{
-          method:'POST',
-          body:JSON.stringify({novelId:currentNovel.id,episodeId:e.id,translation:p1.translation})
-        }));
-        if(!String(p2.translation||'').trim())throw new Error(`${label}: Polish returned empty output.`);
-        const finalText=p2.translation;
-        $('polishedTranslation').value=finalText;
-        updateStats();
+        // Phase 2 — ANY error is skipped. Pass 1 will be saved and the batch continues.
+        let finalText=p1.translation;
+        try{
+          $('batchStatus').textContent=`${label} • Phase 2 Polish...`;
+          const p2=await api('/api/polish',{
+            method:'POST',
+            body:JSON.stringify({novelId:currentNovel.id,episodeId:e.id,translation:p1.translation})
+          });
+          if(!String(p2.translation||'').trim())throw new Error('Polish returned empty output.');
+          finalText=p2.translation;
+          $('polishedTranslation').value=finalText;
+          updateStats();
+        }catch(polishError){
+          polishSkipped++;
+          polishErrors.push(`#${e.number}: ${polishError.message||'Polish failed'}`);
+          finalText=p1.translation;
+          $('polishedTranslation').value='';
+          updateStats();
+          $('batchStatus').textContent=`${label} • Phase 2 error → skipping Polish, saving Pass 1...`;
+        }
 
-        // Save exactly one chapter at a time.
+        // Save Pass 2 when available; otherwise save Pass 1 after any Phase 2 error.
         $('batchStatus').textContent=`${label} • Saving...`;
         const saved=await runUntilSuccess(label,'Save',()=>saveBatchEpisode(e,finalText));
         setEpisodeUI({...saved,source:e.source||saved.source||'',translation:finalText});
@@ -156,11 +167,11 @@
         await sleep(500);
       }
 
-      const summary=`Batch complete • ${completed}/${count} saved`;
+      const summary=`Batch complete • ${completed}/${count} saved${polishSkipped?` • ${polishSkipped} Pass 2 skipped`:''}`;
       $('batchStatus').textContent=summary;
-      setStatus(summary,true);
+      setStatus(polishErrors.length?`${summary}\n${polishErrors.slice(0,5).join(' | ')}`:summary,true);
       saveNotice(summary);
-      notify('Batch completed ✓',`${summary}. All chapters were translated, polished, and saved.`, 'batch-complete');
+      notify('Batch completed ✓',`${summary}.`, 'batch-complete');
     }catch(e){
       $('batchStatus').textContent=`Batch stopped • ${completed}/${count} saved`;
       setStatus(e.message||'Batch stopped.',false);
