@@ -14,7 +14,7 @@ if(start<0||end<0)throw new Error('Excel export function could not be patched sa
 const replacement=`async function buildTemplateWorkbook(novelId){
   const novel=await q(supabase.from('novels').select('*').eq('id',novelId).single());
   const glossary=await q(supabase.from('glossary_terms').select('*').eq('novel_id',novelId).order('created_at'));
-  const episodes=await q(supabase.from('episodes').select('*').eq('novel_id',novelId).order('number'));
+  const episodes=(await q(supabase.from('episodes').select('*').eq('novel_id',novelId))).sort((a,b)=>Number(a.number)-Number(b.number));
   const wb=new ExcelJS.Workbook();
   wb.creator='MM Novel workbook';
 
@@ -48,7 +48,7 @@ const replacement=`async function buildTemplateWorkbook(novelId){
 
   const cs=wb.addWorksheet('Chapters');
   cs.addRow(['chapterNo','title','sourceLanguage','sourceContent','translatedTitle','translatedContent','publishImmediately']);
-  for(const e of episodes)cs.addRow([e.number,excelValue(e.title),'zh',excelValue(e.source),excelValue(e.title),excelValue(e.translation),Boolean(String(e.translation||'').trim())]);
+  for(const [index,e] of episodes.entries()){const chapterNo=Number(e.number);cs.addRow([Number.isSafeInteger(chapterNo)&&chapterNo>0?chapterNo:index+1,excelValue(e.title),'zh',excelValue(e.source),excelValue(e.title),excelValue(e.translation),Boolean(String(e.translation||'').trim())]);}
   [14,28,18,72,28,72,22].forEach((w,i)=>cs.getColumn(i+1).width=w);cs.freezePane='A2';cs.autoFilter='A1:G1';cs.getRow(1).height=28;cs.getRow(1).eachCell(c=>Object.assign(c,headerStyle));
   for(let r=2;r<=cs.rowCount;r++)cs.getRow(r).eachCell(c=>Object.assign(c,bodyStyle));
 
