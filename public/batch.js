@@ -87,7 +87,7 @@
     const count=Number($('batchCount').value);
 
     if(!Number.isInteger(start)||start<1)return alert('Enter a valid starting chapter number.');
-    if(!Number.isInteger(count)||count<1||count>100)return alert('Batch size must be between 1 and 100 chapters.');
+    if(!Number.isInteger(count)||count<1||count>500)return alert('Batch size must be between 1 and 500 chapters.');
 
     const chapters=[];
     for(let n=start;n<start+count;n++){
