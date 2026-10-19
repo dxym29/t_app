@@ -10,7 +10,15 @@
   function updateEpisodeMeta(e){const i=episodes.findIndex(x=>x.id===e.id);const meta={id:e.id,novel_id:e.novel_id,number:e.number,title:e.title||'',status:e.status||'translated',model:e.model||'',updated_at:e.updated_at||''};if(i>=0)episodes[i]=meta;else episodes.push(meta);episodes.sort((a,b)=>Number(a.number)-Number(b.number));$('episodeSelect').innerHTML=episodes.map(x=>`<option value="${x.id}">#${x.number} ${esc(x.title||'')}</option>`).join('');$('episodeSelect').value=e.id;renderEpisodes()}
   async function getFullEpisode(id){return await api(`/api/episodes/${currentNovel.id}/${id}`)}
   async function saveBatchEpisode(e,translation){const saved=await api(`/api/episodes/${currentNovel.id}/${e.id}`,{method:'PUT',body:JSON.stringify({number:Number(e.number),title:e.title||'',source:e.source||'',translation,status:'translated'})});updateEpisodeMeta(saved);currentEpisode=saved;return saved}
-  async function runUntilSuccess(label,phase,fn){let attempt=0;while(true){attempt++;try{return await fn()}catch(error){if(isQuotaError(error)){notify('Batch stopped — quota exceeded',`${label} • ${phase} hit a quota/rate limit.`,'batch-quota');throw new Error(`${label}: ${phase} stopped because quota/rate limit was exceeded.`)}$('batchStatus').textContent=`${label} • ${phase} error (attempt ${attempt}) • retrying in ${RETRY_DELAY/1000}s...`;setStatus(`${label} • ${phase} failed. Retrying automatically...`,false);await sleep(RETRY_DELAY)}}}
+  async function runUntilSuccess(label,phase,fn){let attempt=0;while(true){attempt++;try{return await fn()}catch(error){if(isQuotaError(error)){notify('Batch stopped — quota exceeded',`${label} • ${phase} hit a quota/rate limit.`,'batch-quota');throw new Error(`${label}: ${phase} stopped because quota/rate limit was exceeded.`)}$('batchStatus').textContent=`${label} • ${phase} error (attempt ${attempt}) • retrying in ${RETRY_DELAY/1000}s...`;
+      setStatus(`${label} • ${phase} failed. Retrying automatically...`,false);await sleep(RETRY_DELAY)}}}
+  async function translateUntilNonEmpty(label,e){
+    return await runUntilSuccess(label,'Phase 1 Translate',async()=>{
+      const p1=await api('/api/translate',{method:'POST',body:JSON.stringify({novelId:currentNovel.id,episodeId:e.id,source:e.source})});
+      if(!String(p1?.translation||'').trim())throw new Error('Phase 1 returned an empty translation. Waiting 10 seconds and retrying this same chapter.');
+      return p1;
+    });
+  }
   async function runBatch(){
     if(!currentNovel)return alert('Select a novel first.');
     const list=await api(`/api/episodes/${currentNovel.id}/list`);
@@ -25,7 +33,7 @@
     for(let n=start;n<start+count;n++){const e=sorted.find(x=>Number(x.number)===n);if(!e){skippedMissing.push(n);continue}chapters.push(e)}
     if(!chapters.length){setStatus(`Batch has no existing chapters in #${start}–#${start+count-1}.`,false);notify('Batch stopped',`No existing chapters in #${start}–#${start+count-1}.`,'batch-stop');return}
     const missingText=skippedMissing.length?`\n\nMissing chapters will be skipped automatically: ${skippedMissing.join(', ')}.`:'';
-    if(!confirm(`Run ${chapters.length} available chapters: #${chapters[0].number}–#${chapters[chapters.length-1].number}?${missingText}\n\n1. Pass 1 Translate\n2. Pass 2 Polish\n3. Save final result\n\nQuota/rate-limit errors stop the batch. Other Phase 1 errors retry automatically. Any Phase 2 error is skipped and Pass 1 is saved. Empty source OR empty translation results are skipped automatically.`))return;
+    if(!confirm(`Run ${chapters.length} available chapters: #${chapters[0].number}–#${chapters[chapters.length-1].number}?${missingText}\n\n1. Pass 1 Translate\n2. Pass 2 Polish\n3. Save final result\n\nQuota/rate-limit errors stop the batch. Other Phase 1 errors retry automatically. An empty Phase 1 translation is retried until a real translation is returned. Any Phase 2 error is skipped and Pass 1 is saved. Empty source is skipped automatically.`))return;
     const btn=$('batchBtn');btn.disabled=true;await requestNotifications();$('batchStatus').textContent=`Starting batch • ${chapters.length} chapters${skippedMissing.length?` • ${skippedMissing.length} missing skipped`:''}`;
     let completed=0,skipped=skippedMissing.length,emptySkipped=0,polishSkipped=0;const skippedReasons=skippedMissing.map(n=>`#${n}: chapter not found`);const polishErrors=[];
     try{
@@ -34,14 +42,7 @@
         const e=await runUntilSuccess(label,'Loading',()=>getFullEpisode(meta.id));setEpisodeUI(e);
         if(!String(e.source||'').trim()){skipped++;emptySkipped++;skippedReasons.push(`#${e.number}: source is empty`);$('batchStatus').textContent=`${label} • skipped — source data is empty`;setStatus(`${label} skipped — source data is empty. Continuing batch...`,false);continue}
         $('batchStatus').textContent=`${label} • Phase 1 Translate...`;
-        const p1=await runUntilSuccess(label,'Phase 1 Translate',()=>api('/api/translate',{method:'POST',body:JSON.stringify({novelId:currentNovel.id,episodeId:e.id,source:e.source})}));
-        if(!String(p1?.translation||'').trim()){
-          skipped++;emptySkipped++;skippedReasons.push(`#${e.number}: Phase 1 returned empty translation`);
-          $('translation').value='';$('polishedTranslation').value='';updateStats();
-          $('batchStatus').textContent=`${label} • skipped — translation data is empty`;
-          setStatus(`${label} skipped — Phase 1 returned no translation. Continuing batch...`,false);
-          continue;
-        }
+        const p1=await translateUntilNonEmpty(label,e);
         $('translation').value=p1.translation;$('polishedTranslation').value='';currentEpisode.translation=p1.translation;updateStats();
         let finalText=p1.translation;
         try{$('batchStatus').textContent=`${label} • Phase 2 Polish...`;const p2=await api('/api/polish',{method:'POST',body:JSON.stringify({novelId:currentNovel.id,episodeId:e.id,translation:p1.translation})});if(!String(p2.translation||'').trim())throw new Error('Polish returned empty output.');finalText=p2.translation;$('polishedTranslation').value=finalText;updateStats()}catch(polishError){polishSkipped++;polishErrors.push(`#${e.number}: ${polishError.message||'Polish failed'}`);finalText=p1.translation;$('polishedTranslation').value='';updateStats();$('batchStatus').textContent=`${label} • Phase 2 error → skipping Polish, saving Pass 1...`}
