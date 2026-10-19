@@ -25,7 +25,7 @@
     for(let n=start;n<start+count;n++){const e=sorted.find(x=>Number(x.number)===n);if(!e){skippedMissing.push(n);continue}chapters.push(e)}
     if(!chapters.length){setStatus(`Batch has no existing chapters in #${start}–#${start+count-1}.`,false);notify('Batch stopped',`No existing chapters in #${start}–#${start+count-1}.`,'batch-stop');return}
     const missingText=skippedMissing.length?`\n\nMissing chapters will be skipped automatically: ${skippedMissing.join(', ')}.`:'';
-    if(!confirm(`Run ${chapters.length} available chapters: #${chapters[0].number}–#${chapters[chapters.length-1].number}?${missingText}\n\n1. Pass 1 Translate\n2. Pass 2 Polish\n3. Save final result\n\nQuota/rate-limit errors stop the batch. Other Phase 1 errors retry automatically. Any Phase 2 error is skipped and Pass 1 is saved. Empty source chapters are also skipped.`))return;
+    if(!confirm(`Run ${chapters.length} available chapters: #${chapters[0].number}–#${chapters[chapters.length-1].number}?${missingText}\n\n1. Pass 1 Translate\n2. Pass 2 Polish\n3. Save final result\n\nQuota/rate-limit errors stop the batch. Other Phase 1 errors retry automatically. Any Phase 2 error is skipped and Pass 1 is saved. Empty source OR empty translation results are skipped automatically.`))return;
     const btn=$('batchBtn');btn.disabled=true;await requestNotifications();$('batchStatus').textContent=`Starting batch • ${chapters.length} chapters${skippedMissing.length?` • ${skippedMissing.length} missing skipped`:''}`;
     let completed=0,skipped=skippedMissing.length,emptySkipped=0,polishSkipped=0;const skippedReasons=skippedMissing.map(n=>`#${n}: chapter not found`);const polishErrors=[];
     try{
@@ -35,7 +35,14 @@
         if(!String(e.source||'').trim()){skipped++;emptySkipped++;skippedReasons.push(`#${e.number}: source is empty`);$('batchStatus').textContent=`${label} • skipped — source data is empty`;setStatus(`${label} skipped — source data is empty. Continuing batch...`,false);continue}
         $('batchStatus').textContent=`${label} • Phase 1 Translate...`;
         const p1=await runUntilSuccess(label,'Phase 1 Translate',()=>api('/api/translate',{method:'POST',body:JSON.stringify({novelId:currentNovel.id,episodeId:e.id,source:e.source})}));
-        $('translation').value=p1.translation||'';$('polishedTranslation').value='';currentEpisode.translation=p1.translation||'';updateStats();if(!String(p1.translation||'').trim())throw new Error(`${label}: Phase 1 returned empty translation.`);
+        if(!String(p1?.translation||'').trim()){
+          skipped++;emptySkipped++;skippedReasons.push(`#${e.number}: Phase 1 returned empty translation`);
+          $('translation').value='';$('polishedTranslation').value='';updateStats();
+          $('batchStatus').textContent=`${label} • skipped — translation data is empty`;
+          setStatus(`${label} skipped — Phase 1 returned no translation. Continuing batch...`,false);
+          continue;
+        }
+        $('translation').value=p1.translation;$('polishedTranslation').value='';currentEpisode.translation=p1.translation;updateStats();
         let finalText=p1.translation;
         try{$('batchStatus').textContent=`${label} • Phase 2 Polish...`;const p2=await api('/api/polish',{method:'POST',body:JSON.stringify({novelId:currentNovel.id,episodeId:e.id,translation:p1.translation})});if(!String(p2.translation||'').trim())throw new Error('Polish returned empty output.');finalText=p2.translation;$('polishedTranslation').value=finalText;updateStats()}catch(polishError){polishSkipped++;polishErrors.push(`#${e.number}: ${polishError.message||'Polish failed'}`);finalText=p1.translation;$('polishedTranslation').value='';updateStats();$('batchStatus').textContent=`${label} • Phase 2 error → skipping Polish, saving Pass 1...`}
         $('batchStatus').textContent=`${label} • Saving...`;const saved=await runUntilSuccess(label,'Save',()=>saveBatchEpisode(e,finalText));setEpisodeUI({...saved,source:e.source||saved.source||'',translation:finalText});completed++;$('batchStatus').textContent=`${label} • Saved • ${completed}/${chapters.length}`;setStatus(`Batch progress: ${completed}/${chapters.length} saved${skipped?` • ${skipped} skipped`:''}`,true);await sleep(500);
