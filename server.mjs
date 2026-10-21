@@ -36,7 +36,7 @@ function filterGlossaryToSource(g,source){const text=String(source||'');const ou
 function lockText(text,locks){let out=String(text||'');for(const x of locks)out=out.split(x.original).join(x.token);return out}
 function lockTranslationText(text,locks){let out=String(text||'');const ordered=[...locks].sort((a,b)=>b.translation.length-a.translation.length);for(const x of ordered)out=out.split(x.translation).join(x.token);return out}
 function restoreNameLocks(text,locks){let out=String(text||'');for(const x of locks){out=out.split(x.token).join(x.translation);out=out.split(x.original).join(x.translation)}return out}
-function lockedGlossaryText(g,locks){const map=new Map(locks.map(x=>[x.original,x]));const lines=[];for(const [type,arr] of Object.entries(g||{}))for(const x of arr||[]){const l=map.get(String(x.original||'').trim());lines.push(`${type}: ${l?.token||x.original} => ${x.translation}${x.voice?` | voice: ${x.voice}`:''}${x.note?` | note: ${x.note}`:''}`)}return lines.join('\n')||'(none)'}
+function lockedGlossaryText(g,locks){const map=new Map(locks.map(x=>[x.original,x]));const lines=[];for(const [type,arr] of Object.entries(g||{}))for(const x of arr||[]){const l=map.get(String(x.original||'').trim());lines.push(`${type}: ${l?.token||x.original} => ${x.translation}${x.voice?` | voice: ${x.voice}`:''}${x.note?` | note: ${x.note}`:''}`)}return lines.join(String.fromCharCode(10))}
 function countChars(text){return Array.from(String(text||'')).length}
 function tokenRegex(token){return new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'g')}
 function countToken(text,token){return (String(text||'').match(tokenRegex(token))||[]).length}
