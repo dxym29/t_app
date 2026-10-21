@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "node --watch server.mjs",
-    "start": "node boot.mjs"
+    "start": "node server.mjs"
   },
   "dependencies": {
     "@google/genai": "^1.20.0",
