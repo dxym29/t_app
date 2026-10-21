@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <title>Webnovel Translator</title>
-  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/style.css?v=20261014-1">
 </head>
 <body>
 <main class="wrap">
@@ -15,130 +15,35 @@
 
   <section class="card">
     <label>Novel</label>
-    <div class="row">
-      <select id="novelSelect"></select>
-      <button id="newNovelBtn">New Novel</button>
-      <button id="deleteNovelBtn" class="danger">Delete</button>
-    </div>
-    <input id="novelName" placeholder="Novel name">
-    <textarea id="novelStyle" placeholder="Novel style / permanent translation rules"></textarea>
-    <button id="saveNovelBtn">Save Novel & Style</button>
+    <div class="row"><select id="novelSelect"></select><button id="newNovelBtn">New Novel</button><button id="deleteNovelBtn" class="danger">Delete</button></div>
+    <input id="novelName" placeholder="Novel name"><textarea id="novelStyle" placeholder="Novel style / permanent translation rules"></textarea><button id="saveNovelBtn">Save Novel & Style</button>
   </section>
 
   <section class="card">
-    <div class="row">
-      <label class="grow">Episode
-        <select id="episodeSelect"></select>
-      </label>
-      <button id="newEpisodeBtn">New Episode</button>
-      <button id="deleteEpisodeBtn" class="danger">Delete</button>
-    </div>
-    <input id="episodeNumber" type="number" min="1" placeholder="Episode number">
-    <input id="episodeTitle" placeholder="Episode title">
+    <div class="row"><label class="grow">Episode <select id="episodeSelect"></select></label><button id="newEpisodeBtn">New Episode</button><button id="deleteEpisodeBtn" class="danger">Delete</button></div>
+    <input id="episodeNumber" type="number" min="1" placeholder="Episode number"><input id="episodeTitle" placeholder="Episode title">
   </section>
 
   <section class="card">
     <h2>Batch Translate / Polish / Save</h2>
     <p class="muted">Processes chapters one by one using the existing single-chapter workflow. Phase 1 error stops the batch. Phase 2 error saves Pass 1 and continues.</p>
-    <div class="row">
-      <label>Start chapter
-        <input id="batchStart" type="number" min="1" placeholder="204">
-      </label>
-      <label>Chapters
-        <input id="batchCount" type="number" min="1" max="500" value="10">
-      </label>
-      <button id="batchBtn" class="primary">Run Batch</button>
-    </div>
+    <div class="row"><label>Start chapter <input id="batchStart" type="number" min="1" placeholder="204"></label><label>Chapters <input id="batchCount" type="number" min="1" max="500" value="10"></label><button id="batchBtn" class="primary">Run Batch</button></div>
     <div id="batchStatus" class="muted"></div>
   </section>
 
   <section class="workflow">
-    <section class="card flowBox">
-      <label>Original</label>
-      <div class="row">
-        <input id="chapterUrl" class="grow" placeholder="Paste NovelPing chapter URL or series URL">
-        <button id="fetchChapterBtn">Fetch Chapter / Series</button>
-      </div>
-      <div id="fetchStatus" class="muted"></div>
-      <textarea id="source" class="big" placeholder="Paste the complete source chapter here..."></textarea>
-      <div class="row">
-        <button id="translateBtn" class="primary">Translate</button>
-        <button id="extractGlossaryBtn">Extract Glossary</button>
-      </div>
-      <div id="sourceStats" class="muted"></div>
-    </section>
-
-    <section class="card flowBox">
-      <label>Myanmar Translation — Pass 1</label>
-      <textarea id="translation" class="big"></textarea>
-      <div id="pass1Stats" class="muted"></div>
-      <div class="row">
-        <button id="polishBtn" class="primary">Polish Myanmar → Pass 2</button>
-        <button id="copyPass1Btn">Copy Pass 1</button>
-      </div>
-    </section>
-
-    <section class="card flowBox">
-      <label>Myanmar Translation — Pass 2 (Final)</label>
-      <textarea id="polishedTranslation" class="big"></textarea>
-      <div id="pass2Stats" class="muted"></div>
-      <div class="row">
-        <button id="copyBtn">Copy Final</button>
-        <button id="saveEpisodeBtn">Save Episode</button>
-      </div>
-    </section>
+    <section class="card flowBox"><label>Original</label><div class="row"><input id="chapterUrl" class="grow" placeholder="Paste NovelPing chapter URL or series URL"><button id="fetchChapterBtn">Fetch Chapter / Series</button></div><div id="fetchStatus" class="muted"></div><textarea id="source" class="big" placeholder="Paste the complete source chapter here..."></textarea><div class="row"><button id="translateBtn" class="primary">Translate</button><button id="extractGlossaryBtn">Extract Glossary</button></div><div id="sourceStats" class="muted"></div></section>
+    <section class="card flowBox"><label>Myanmar Translation — Pass 1</label><textarea id="translation" class="big"></textarea><div id="pass1Stats" class="muted"></div><div class="row"><button id="polishBtn" class="primary">Polish Myanmar → Pass 2</button><button id="copyPass1Btn">Copy Pass 1</button></div></section>
+    <section class="card flowBox"><label>Myanmar Translation — Pass 2 (Final)</label><textarea id="polishedTranslation" class="big"></textarea><div id="pass2Stats" class="muted"></div><div class="row"><button id="copyBtn">Copy Final</button><button id="saveEpisodeBtn">Save Episode</button></div></section>
   </section>
 
-  <section class="card">
-    <div id="status"></div>
-  </section>
-
-  <section class="glossaryLayout">
-    <section class="card glossaryPanel">
-      <h2>AI #2 — Important Glossary</h2>
-      <p class="muted">Not saved automatically • only important / potentially recurring entities</p>
-      <div id="extractedGlossary" class="muted">No extraction yet.</div>
-    </section>
-
-    <section class="card glossaryPanel">
-      <h2>Database Glossary / Character Voice</h2>
-      <div class="grid">
-        <select id="termType">
-          <option value="characters">Character</option>
-          <option value="items">Item</option>
-          <option value="locations">Location</option>
-          <option value="organizations">Organization</option>
-          <option value="skills">Skill</option>
-          <option value="other">Other</option>
-        </select>
-        <input id="termOriginal" placeholder="Original">
-        <input id="termTranslation" placeholder="Established Myanmar name">
-        <input id="termNote" placeholder="Note">
-        <input id="termVoice" placeholder="Character voice (optional)">
-      </div>
-      <button id="addTermBtn">Add / Update</button>
-      <div id="glossary"></div>
-    </section>
-  </section>
-
-  <section class="card">
-    <h2>Website Export / Backup</h2>
-    <p class="muted">Export the selected novel as the exact MM Novel workbook format for direct upload to the publishing website. JSON backup remains available for database moves.</p>
-    <div class="row">
-      <button id="exportTemplateBtn" class="primary">Export Website Excel</button>
-      <button id="exportNovelBtn">Export JSON Backup</button>
-      <button id="exportAllBtn">Export All JSON</button>
-      <label class="fileBtn">Import Backup<input id="importFile" type="file" accept=".json" hidden></label>
-    </div>
-  </section>
-
-  <section class="card">
-    <h2>Episodes</h2>
-    <div id="episodes"></div>
-  </section>
+  <section class="card"><div id="status"></div></section>
+  <section class="glossaryLayout"><section class="card glossaryPanel"><h2>AI #2 — Important Glossary</h2><p class="muted">Not saved automatically • only important / potentially recurring entities</p><div id="extractedGlossary" class="muted">No extraction yet.</div></section><section class="card glossaryPanel"><h2>Database Glossary / Character Voice</h2><div class="grid"><select id="termType"><option value="characters">Character</option><option value="items">Item</option><option value="locations">Location</option><option value="organizations">Organization</option><option value="skills">Skill</option><option value="other">Other</option></select><input id="termOriginal" placeholder="Original"><input id="termTranslation" placeholder="Established Myanmar name"><input id="termNote" placeholder="Note"><input id="termVoice" placeholder="Character voice (optional)"></div><button id="addTermBtn">Add / Update</button><div id="glossary"></div></section></section>
+  <section class="card"><h2>Website Export / Backup</h2><p class="muted">Export the selected novel as the exact MM Novel workbook format for direct upload to the publishing website. JSON backup remains available for database moves.</p><div class="row"><button id="exportTemplateBtn" class="primary">Export Website Excel</button><button id="exportNovelBtn">Export JSON Backup</button><button id="exportAllBtn">Export All JSON</button><label class="fileBtn">Import Backup<input id="importFile" type="file" accept=".json" hidden></label></div></section>
+  <section class="card"><h2>Episodes</h2><div id="episodes"></div></section>
 </main>
-<script src="/app.js"></script>
-<script src="/series.js"></script>
-<script src="/batch.js"></script>
+<script src="/app.js?v=20261014-2"></script>
+<script src="/series.js?v=20261014-1"></script>
+<script src="/batch.js?v=20261014-2"></script>
 </body>
 </html>
