@@ -234,9 +234,20 @@ const translateReplacement=`app.post('/api/translate',async(req,res)=>{try{
     const plain=await translateWithoutNameLocks();
     result=plain.translation;modelUsed=plain.model;activeProviderIndex=plain.providerIndex;
   }
-  if(episodeId)await q(supabase.from('episodes').update({source,translation:result,model:modelUsed,status:'translated',updated_at:new Date().toISOString()}).eq('id',episodeId).eq('novel_id',novelId));
-  res.json({translation:result,model:modelUsed,sourceChars:countChars(source),pass1Chars:countChars(result),fallbackUsed:activeProviderIndex>0,providerUsed:providers[activeProviderIndex].name,nameLockFallback});
-}catch(e){fail(res,e)}});`;
+  let episodeSaveWarning=null;
+  if(episodeId){
+    try{
+      await q(supabase.from('episodes').update({source,translation:result,model:modelUsed,status:'translated',updated_at:new Date().toISOString()}).eq('id',episodeId).eq('novel_id',novelId));
+      console.log('TRANSLATE: completed chapter and saved episode '+episodeId+' ('+countChars(result)+' chars).');
+    }catch(saveError){
+      episodeSaveWarning=String(saveError?.message||saveError);
+      console.error('TRANSLATE: generated translation successfully, but episode DB save failed; returning translation to client instead of triggering a full chapter retry:',episodeSaveWarning);
+    }
+  }else{
+    console.log('TRANSLATE: completed translation response ('+countChars(result)+' chars).');
+  }
+  res.json({translation:result,model:modelUsed,sourceChars:countChars(source),pass1Chars:countChars(result),fallbackUsed:activeProviderIndex>0,providerUsed:providers[activeProviderIndex].name,nameLockFallback,episodeSaveWarning});
+}catch(e){console.error('TRANSLATE: request failed before a successful response:',e?.stack||e);fail(res,e)}});`;
 
 source=source.slice(0,translateStart)+translateReplacement+source.slice(translateEnd);
 
