@@ -160,6 +160,7 @@ const translateReplacement=`app.post('/api/translate',async(req,res)=>{try{
     return {translation:plainResult,model:plainModel,providerIndex:plainProviderIndex};
   }
   let activeProviderIndex=0,result='',modelUsed=MODELS[0],nameLockFallback=false;
+  const preferredModelByProvider=new Map();
   for(let i=0;i<chunks.length;i++){
     const chunk=chunks[i],previousSource=i>0?chunks[i-1].slice(-CONTEXT_OVERLAP):'';
     const lockedChunk=lockText(chunk,locks),lockedPreviousSource=lockText(previousSource,locks);
@@ -167,7 +168,10 @@ const translateReplacement=`app.post('/api/translate',async(req,res)=>{try{
     let chunkDone=false,lastError;
     for(let providerIndex=activeProviderIndex;providerIndex<providers.length&&!chunkDone&&!nameLockFallback;providerIndex++){
       const provider=providers[providerIndex];if(!provider.ai)continue;
-      for(const model of provider.models){
+      const orderedModels=[...provider.models];
+      const preferredModel=preferredModelByProvider.get(provider.name);
+      if(preferredModel&&orderedModels.includes(preferredModel)){orderedModels.splice(orderedModels.indexOf(preferredModel),1);orderedModels.unshift(preferredModel)}
+      for(const model of orderedModels){
         for(let attempt=0;attempt<=MAX_RETRIES_PER_MODEL;attempt++){
           try{
             const r=await generateModel(provider.ai,masterPrompt({
@@ -203,8 +207,8 @@ const translateReplacement=`app.post('/api/translate',async(req,res)=>{try{
               break;
             }
             result+=(result?'\\n\\n':'')+translatedChunk;
-            modelUsed=r.model;activeProviderIndex=providerIndex;chunkDone=true;
-            console.log('TRANSLATE: chunk '+(i+1)+'/'+chunks.length+' succeeded with '+provider.name+' / '+model);
+            modelUsed=r.model;activeProviderIndex=providerIndex;preferredModelByProvider.set(provider.name,model);chunkDone=true;
+            console.log('TRANSLATE: chunk '+(i+1)+'/'+chunks.length+' succeeded with '+provider.name+' / '+model+'; this provider will try that model first for subsequent chunks.');
             break;
           }catch(e){
             lastError=e;
@@ -220,7 +224,7 @@ const translateReplacement=`app.post('/api/translate',async(req,res)=>{try{
             }
             if(!retryable(e)&&!message.includes('empty output'))throw e;
             if(attempt===MAX_RETRIES_PER_MODEL)break;
-            console.log(provider.name+' '+model+' chunk '+(i+1)+'/'+chunks.length+' failed (attempt '+(attempt+1)+'/'+MAX_RETRIES_PER_MODEL+'). Retrying in '+RETRY_DELAY+'ms...');
+            console.error('TRANSLATE: '+provider.name+' / '+model+' chunk '+(i+1)+'/'+chunks.length+' failed (attempt '+(attempt+1)+'/'+MAX_RETRIES_PER_MODEL+'): '+message+'. Retrying in '+RETRY_DELAY+'ms...');
             await sleep(RETRY_DELAY);
           }
         }
