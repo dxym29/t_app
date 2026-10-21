@@ -152,6 +152,7 @@ const translateReplacement=`app.post('/api/translate',async(req,res)=>{try{
               lastError=e;
               const msg=String(e?.message||e);
               if(isQuotaErrorLocal(e)){console.warn('TRANSLATE: '+provider.name+' / '+model+' quota exhausted; skipping remaining retries for this model and moving to the next model/provider.');break}
+              if(/PROHIBITED_CONTENT|prompt.?block|safety.?block/i.test(msg)){console.warn('TRANSLATE: '+provider.name+' / '+model+' was blocked by Gemini safety filter in no-NameLock chunk '+(ci+1)+'; skipping this model and trying the next configured model/provider.');break}
               const retry=retryable(e)||/empty output|NameLock placeholder/i.test(msg);
               if(!retry)throw e;
               if(attempt===MAX_RETRIES_PER_MODEL)break;
@@ -229,6 +230,7 @@ const translateReplacement=`app.post('/api/translate',async(req,res)=>{try{
               break;
             }
             if(isQuotaErrorLocal(e)){console.warn('TRANSLATE: '+provider.name+' / '+model+' quota exhausted; skipping remaining retries for this model and moving to the next model/provider.');break}
+            if(/PROHIBITED_CONTENT|prompt.?block|safety.?block/i.test(message)){console.warn('TRANSLATE: '+provider.name+' / '+model+' was blocked by Gemini safety filter in NameLock chunk '+(i+1)+'; skipping this model and trying the next configured model/provider.');break}
             if(!retryable(e)&&!message.includes('empty output'))throw e;
             if(attempt===MAX_RETRIES_PER_MODEL)break;
             console.error('TRANSLATE: '+provider.name+' / '+model+' chunk '+(i+1)+'/'+chunks.length+' failed (attempt '+(attempt+1)+'/'+MAX_RETRIES_PER_MODEL+'): '+message+'. Retrying in '+RETRY_DELAY+'ms...');
