@@ -131,6 +131,10 @@ const translateReplacement=`app.post('/api/translate',async(req,res)=>{try{
       const lockedChunk=useLocks?lockText(chunk,locks):chunk;
       const lockedPrevious=useLocks?lockText(previousSource,locks):previousSource;
       const expected=new Map(locks.map(x=>[x.token,countToken(lockedChunk,x.token)]));
+      // Only expose glossary entries whose protected token actually occurs in this chunk.
+      // This avoids asking the model to use tokens for names that are not in the text being translated.
+      const chunkLocks=useLocks?locks.filter(x=>(expected.get(x.token)||0)>0):[];
+      const chunkGlossary=useLocks?filterGlossaryToSource(glossary,chunk):glossary;
       let done=false,lastError, nameLockAttempts=0;
       while(!done){
         if(stageIndex>=stages.length){const exhausted=new Error('SKIP_CHAPTER: all configured translation APIs/models are out of quota.');exhausted.code='QUOTA_EXHAUSTED';throw exhausted;}
@@ -142,16 +146,18 @@ const translateReplacement=`app.post('/api/translate',async(req,res)=>{try{
         }
         try{
           const r=await generateModel(stage.ai,masterPrompt({
-            style:novel.style,glossary,locks:useLocks?locks:[],source:lockedChunk,
+            style:novel.style,glossary:chunkGlossary,locks:chunkLocks,source:lockedChunk,
             previousTail:result.slice(-5000),sourceContext:lockedPrevious
           }),stage.model);
           let output=String(r.text||'').trim();
           if(!output)throw new Error('Translation model returned empty output.');
           if(useLocks){
             output=repairInventedNameLocks(output,locks);
-            const valid=validateLockedOutput(output,locks,expected);
+            const valid=validateLockedOutput(output,chunkLocks,expected);
             if(!valid){
+              const mismatches=chunkLocks.map(x=>({token:x.token,expected:expected.get(x.token)||0,actual:countToken(output,x.token)})).filter(x=>x.expected!==x.actual);
               nameLockAttempts++;
+              console.warn('TRANSLATE: NameLock token mismatch for chunk '+(i+1)+'/'+workChunks.length+': '+JSON.stringify(mismatches));
               if(nameLockAttempts<3){
                 console.warn('TRANSLATE: NameLock validation failed for chunk '+(i+1)+'/'+workChunks.length+'; real retry '+nameLockAttempts+'/3 in 3s.');
                 await sleep(3000);
