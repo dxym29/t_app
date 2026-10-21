@@ -119,6 +119,8 @@ const translateReplacement=`app.post('/api/translate',async(req,res)=>{try{
     {name:'fallback-2',ai:aiTranslateFallback2,models:[TRANSLATE_FALLBACK_MODEL_2]}
   ];
   const isLockError=e=>String(e?.message||e).includes('NameLock validation');
+  const isQuotaErrorLocal=e=>/429|RESOURCE_EXHAUSTED|quota exceeded|rate.?limit|GenerateRequestsPerDayPerModel|retryDelay/i.test(String(e?.message||e));
+  const preferredModelByProvider=new Map();
   async function translateWithoutNameLocks(){
     console.warn('TRANSLATE: NameLock validation failed after 3 checks. Restarting the WHOLE chapter without NameLock.');
     const plainChunks=splitText(source,7000);
@@ -129,23 +131,28 @@ const translateReplacement=`app.post('/api/translate',async(req,res)=>{try{
       let done=false,lastError;
       for(let pi=plainProviderIndex;pi<providers.length&&!done;pi++){
         const provider=providers[pi];if(!provider.ai)continue;
-        for(const model of provider.models){
+        const orderedModels=[...provider.models];
+        const preferred=preferredModelByProvider.get(provider.name);
+        if(preferred&&orderedModels.includes(preferred)){orderedModels.splice(orderedModels.indexOf(preferred),1);orderedModels.unshift(preferred)}
+        for(const model of orderedModels){
           for(let attempt=0;attempt<=MAX_RETRIES_PER_MODEL;attempt++){
             try{
               const r=await generateModel(provider.ai,masterPrompt({
                 style:novel.style,glossary,locks:[],source:plainChunk,
                 previousTail:plainResult.slice(-5000),sourceContext:previousSource
-              }).replace('NAME LOCK is active. Every [[NAMELOCK_###]] token already present in SOURCE is protected. Copy it EXACTLY. NEVER create any [[NAMELOCK_...]] token yourself. If a name is not represented by a protected token, output the name normally. Never invent placeholders. Never translate, alter, remove, split, duplicate, or paraphrase a protected token.','NAME LOCK is disabled for this chapter after validation failure. Translate names naturally and consistently using the glossary. Do not output any placeholder tokens.'),model);
+              }),model);
               const output=String(r.text||'').trim();
               if(!output)throw new Error('Translation model returned empty output.');
               if(/\\[\\[NAMELOCK_[^\\]]+\\]\\]/i.test(output))throw new Error('Translation output unexpectedly contains a NameLock placeholder.');
               plainResult+=(plainResult?'\\n\\n':'')+output;
-              plainModel=r.model;plainProviderIndex=pi;done=true;
+              plainModel=r.model;plainProviderIndex=pi;preferredModelByProvider.set(provider.name,model);done=true;
               console.log('TRANSLATE: no-NameLock chapter chunk '+(ci+1)+'/'+plainChunks.length+' succeeded with '+provider.name+' / '+model);
               break;
             }catch(e){
               lastError=e;
-              const retry=retryable(e)||String(e?.message||e).includes('empty output')||String(e?.message||e).includes('NameLock placeholder');
+              const msg=String(e?.message||e);
+              if(isQuotaErrorLocal(e)){console.warn('TRANSLATE: '+provider.name+' / '+model+' quota exhausted; skipping remaining retries for this model and moving to the next model/provider.');break}
+              const retry=retryable(e)||/empty output|NameLock placeholder/i.test(msg);
               if(!retry)throw e;
               if(attempt===MAX_RETRIES_PER_MODEL)break;
               console.log('TRANSLATE: no-NameLock '+provider.name+' / '+model+' chunk '+(ci+1)+' retry '+(attempt+1)+'/'+MAX_RETRIES_PER_MODEL+' in '+RETRY_DELAY+'ms.');
@@ -160,7 +167,6 @@ const translateReplacement=`app.post('/api/translate',async(req,res)=>{try{
     return {translation:plainResult,model:plainModel,providerIndex:plainProviderIndex};
   }
   let activeProviderIndex=0,result='',modelUsed=MODELS[0],nameLockFallback=false;
-  const preferredModelByProvider=new Map();
   for(let i=0;i<chunks.length;i++){
     const chunk=chunks[i],previousSource=i>0?chunks[i-1].slice(-CONTEXT_OVERLAP):'';
     const lockedChunk=lockText(chunk,locks),lockedPreviousSource=lockText(previousSource,locks);
@@ -222,6 +228,7 @@ const translateReplacement=`app.post('/api/translate',async(req,res)=>{try{
               console.warn('TRANSLATE: NameLock error persisted. Restarting the whole chapter without NameLock.');
               break;
             }
+            if(isQuotaErrorLocal(e)){console.warn('TRANSLATE: '+provider.name+' / '+model+' quota exhausted; skipping remaining retries for this model and moving to the next model/provider.');break}
             if(!retryable(e)&&!message.includes('empty output'))throw e;
             if(attempt===MAX_RETRIES_PER_MODEL)break;
             console.error('TRANSLATE: '+provider.name+' / '+model+' chunk '+(i+1)+'/'+chunks.length+' failed (attempt '+(attempt+1)+'/'+MAX_RETRIES_PER_MODEL+'): '+message+'. Retrying in '+RETRY_DELAY+'ms...');
