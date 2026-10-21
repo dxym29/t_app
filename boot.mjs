@@ -111,6 +111,20 @@ function lockChunkWithUniqueTokens(text,locks){
 }
 function lockTranslationText(text,locks){let out=String(text||'');const ordered=[...locks].sort((a,b)=>b.translation.length-a.translation.length);for(const x of ordered)out=out.split(x.translation).join(x.token);return out}
 function findNameLockTokens(text){const re=new RegExp('\\\\[\\\\[NAMELOCK_([^\\\\]]+)\\\\]\\\\]','g');return [...String(text||'').matchAll(re)].map(m=>({raw:m[0],label:m[1]}))}
+function repairMissingNameLocksFromLiteralNames(text,locks){
+  let out=String(text||'');
+  for(const x of locks){
+    if(countToken(out,x.token)===1)continue;
+    const forms=[x.matchedForm,x.original,...(x.aliases||[])].filter(Boolean).sort((a,b)=>b.length-a.length);
+    for(const form of forms){
+      if(countToken(out,x.token)===1)break;
+      const escaped=String(form).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+      const re=new RegExp(escaped,'i');
+      if(re.test(out))out=out.replace(re,x.token);
+    }
+  }
+  return out;
+}
 function repairInventedNameLocks(text,locks){let out=String(text||'');const byLabel=new Map();for(const x of locks){byLabel.set(normalizeNameKey(x.original),x.token);for(const a of x.aliases||[])byLabel.set(normalizeNameKey(a),x.token)}for(const m of findNameLockTokens(out)){if(locks.some(x=>x.token===m.raw))continue;const mapped=byLabel.get(normalizeNameKey(String(m.label||'').replace(/[_-]+/g,' ')));if(!mapped)throw new Error('NameLock validation failed: unknown placeholder '+m.raw);out=out.split(m.raw).join(mapped)}return out}
 function restoreNameLocks(text,locks){let out=String(text||'');for(const x of locks){out=out.split(x.token).join(x.translation);for(const a of x.aliases||[])out=out.split(a).join(x.translation);out=out.split(x.original).join(x.translation)}if(/\[\[NAMELOCK_[^\]]+\]\]/i.test(out))throw new Error('NameLock validation failed: unresolved placeholder remains');return out}
 function lockedGlossaryText(g,locks){const lines=[];for(const [type,arr] of Object.entries(g||{}))for(const x of arr||[]){const original=String(x.original||'').trim();const matching=locks.filter(l=>normalizeNameKey(l.original)===normalizeNameKey(original));const tokens=[...new Set(matching.map(l=>l.token))];const aliases=[...new Set(matching.flatMap(l=>l.aliases||[]))];const tokenLabel=tokens.length?tokens.join(', '):original;const forms=aliases.length?' | source forms: '+[original,...aliases].join(' / '):'';lines.push(type+': '+tokenLabel+' => '+x.translation+forms+(x.voice?' | voice: '+x.voice:'')+(x.note?' | note: '+x.note:''))}return lines.join(String.fromCharCode(10))||'(none)'}
@@ -178,6 +192,8 @@ const translateReplacement=`app.post('/api/translate',async(req,res)=>{try{
           if(!output)throw new Error('Translation model returned empty output.');
           if(useLocks){
             output=repairInventedNameLocks(output,chunkLocks);
+            // Some models ignore placeholder syntax but still preserve the literal source name; recover those safely before retrying.
+            output=repairMissingNameLocksFromLiteralNames(output,chunkLocks);
             const valid=validateLockedOutput(output,chunkLocks,expected);
             if(!valid){
               const mismatches=chunkLocks.map(x=>({token:x.token,expected:1,actual:countToken(output,x.token),sourceTerm:x.original})).filter(x=>x.actual!==1);
