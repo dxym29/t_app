@@ -2,7 +2,7 @@
   const $=id=>document.getElementById(id);
   if(!$('batchBtn'))return;
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-  const RETRY_DELAY=10000;
+  const RETRY_DELAY=5000;
   function isQuotaError(error){const text=String(error?.message||error||'').toLowerCase();return /quota|resource exhausted|rate.?limit|too many requests|\b429\b|exceeded.*limit|limit.*exceeded/.test(text)}
   async function requestNotifications(){if(!('Notification' in window))return false;if(Notification.permission==='granted')return true;if(Notification.permission==='denied')return false;try{return (await Notification.requestPermission())==='granted'}catch{return false}}
   function notify(title,body,tag='batch'){if(!('Notification' in window)||Notification.permission!=='granted')return;try{const n=new Notification(title,{body,tag});n.onclick=()=>{window.focus();n.close()}}catch{}}
@@ -10,8 +10,8 @@
   function updateEpisodeMeta(e){const i=episodes.findIndex(x=>x.id===e.id);const meta={id:e.id,novel_id:e.novel_id,number:e.number,title:e.title||'',status:e.status||'translated',model:e.model||'',updated_at:e.updated_at||''};if(i>=0)episodes[i]=meta;else episodes.push(meta);episodes.sort((a,b)=>Number(a.number)-Number(b.number));$('episodeSelect').innerHTML=episodes.map(x=>`<option value="${x.id}">#${x.number} ${esc(x.title||'')}</option>`).join('');$('episodeSelect').value=e.id;renderEpisodes()}
   async function getFullEpisode(id){return await api(`/api/episodes/${currentNovel.id}/${id}`)}
   async function saveBatchEpisode(e,translation){const saved=await api(`/api/episodes/${currentNovel.id}/${e.id}`,{method:'PUT',body:JSON.stringify({number:Number(e.number),title:e.title||'',source:e.source||'',translation,status:'translated'})});updateEpisodeMeta(saved);currentEpisode=saved;return saved}
-  async function runUntilSuccess(label,phase,fn){let attempt=0;while(true){attempt++;try{return await fn()}catch(error){if(isQuotaError(error)){notify('Batch stopped — quota exceeded',`${label} • ${phase} hit a quota/rate limit.`,'batch-quota');throw new Error(`${label}: ${phase} stopped because quota/rate limit was exceeded.`)}$('batchStatus').textContent=`${label} • ${phase} error (attempt ${attempt}) • retrying in ${RETRY_DELAY/1000}s...`;
-      setStatus(`${label} • ${phase} failed. Retrying automatically...`,false);await sleep(RETRY_DELAY)}}}
+  async function runUntilSuccess(label,phase,fn){let attempt=0;const maxAttempts=phase==='Phase 1 Translate'?3:5;while(true){attempt++;try{return await fn()}catch(error){if(isQuotaError(error)){notify('Batch stopped — quota exceeded',`${label} • ${phase} hit a quota/rate limit.`,'batch-quota');throw new Error(`${label}: ${phase} stopped because quota/rate limit was exceeded.`)}if(attempt>=maxAttempts){notify('Batch stopped — retry limit reached',`${label} • ${phase} failed after ${attempt} attempts.`,'batch-retry-limit');throw new Error(`${label}: ${phase} failed after ${attempt} attempts. Stopping instead of retrying forever. Last error: ${error?.message||error}`)}$('batchStatus').textContent=`${label} • ${phase} error (attempt ${attempt}/${maxAttempts}) • retrying in ${RETRY_DELAY/1000}s...`;
+      setStatus(`${label} • ${phase} failed. Retrying automatically (${attempt}/${maxAttempts})...`,false);await sleep(RETRY_DELAY)}}}
   async function translateUntilNonEmpty(label,e){
     return await runUntilSuccess(label,'Phase 1 Translate',async()=>{
       const p1=await api('/api/translate',{method:'POST',body:JSON.stringify({novelId:currentNovel.id,episodeId:e.id,source:e.source})});
