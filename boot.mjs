@@ -119,6 +119,11 @@ source=source.slice(0,lockStart)+lockReplacement+source.slice(lockEnd);
 
 // Stronger translation prompt rule: model must never invent NameLock tokens.
 source=source.replace('Every [[NAMELOCK_###]] token in SOURCE is protected. Copy it EXACTLY. Never translate, alter, remove, split, duplicate, or paraphrase it.','Every [[NAMELOCK_###]] token already present in SOURCE is protected. Copy it EXACTLY. NEVER create any [[NAMELOCK_...]] token yourself. If a name is not represented by a protected token, output the name normally. Never invent placeholders. Never translate, alter, remove, split, duplicate, or paraphrase a protected token.');
+// Add an explicit per-occurrence checklist so repeated names do not rely on the glossary summary alone.
+const glossaryAnchor='\\nAUTHORITATIVE GLOSSARY:\\n${lockedGlossaryText(glossary,locks)}\\n\\nPREVIOUS TRANSLATED TAIL FOR CONTINUITY ONLY:';
+const glossaryWithChecklist='\\nAUTHORITATIVE GLOSSARY:\\n${lockedGlossaryText(glossary,locks)}\\n\\nPROTECTED TOKEN CHECKLIST (copy EVERY listed token exactly once; do not skip any):\\n${locks?.length ? locks.map(x=>`${x.token} => ${x.translation} (source: ${x.original})`).join(String.fromCharCode(10)) : "(none)"}\\n\\nPREVIOUS TRANSLATED TAIL FOR CONTINUITY ONLY:';
+if(!source.includes(glossaryAnchor))throw new Error('Could not safely locate master prompt glossary section.');
+source=source.replace(glossaryAnchor,glossaryWithChecklist);
 
 // Replace translation route with a chunk state machine. A fallback changes model only for the current failed chunk;
 // already completed chunks remain in result and are never replayed.
