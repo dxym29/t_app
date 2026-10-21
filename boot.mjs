@@ -131,7 +131,7 @@ const translateReplacement=`app.post('/api/translate',async(req,res)=>{try{
       const lockedChunk=useLocks?lockText(chunk,locks):chunk;
       const lockedPrevious=useLocks?lockText(previousSource,locks):previousSource;
       const expected=new Map(locks.map(x=>[x.token,countToken(lockedChunk,x.token)]));
-      let done=false,lastError;
+      let done=false,lastError, nameLockAttempts=0;
       while(!done){
         if(stageIndex>=stages.length){const exhausted=new Error('SKIP_CHAPTER: all configured translation APIs/models are out of quota.');exhausted.code='QUOTA_EXHAUSTED';throw exhausted;}
         const stage=stages[stageIndex];
@@ -149,15 +149,16 @@ const translateReplacement=`app.post('/api/translate',async(req,res)=>{try{
           if(!output)throw new Error('Translation model returned empty output.');
           if(useLocks){
             output=repairInventedNameLocks(output,locks);
-            let valid=validateLockedOutput(output,locks,expected);
+            const valid=validateLockedOutput(output,locks,expected);
             if(!valid){
-              for(let check=1;check<=3&&!valid;check++){
-                console.warn('TRANSLATE: NameLock validation failed for chunk '+(i+1)+'/'+workChunks.length+'; check '+check+'/3, retrying validation in 3s without another API call.');
+              nameLockAttempts++;
+              if(nameLockAttempts<3){
+                console.warn('TRANSLATE: NameLock validation failed for chunk '+(i+1)+'/'+workChunks.length+'; real retry '+nameLockAttempts+'/3 in 3s.');
                 await sleep(3000);
-                valid=validateLockedOutput(output,locks,expected);
+                continue;
               }
+              throw new Error('NameLock validation failed after 3 actual translation attempts.');
             }
-            if(!valid)throw new Error('NameLock validation failed after 3 checks.');
             output=restoreNameLocks(output,locks);
           }else if(/\\[\\[NAMELOCK_[^\\]]+\\]\\]/i.test(output)){
             throw new Error('Translation output unexpectedly contains a NameLock placeholder.');
