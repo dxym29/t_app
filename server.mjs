@@ -24,7 +24,7 @@ const TRANSLATE_CHUNK_SIZE=10000;
 const CONTEXT_OVERLAP=200;
 const MODEL_TIMEOUT=45000;
 const MAX_RETRIES_PER_MODEL=2;
-const RETRY_DELAY=3000;
+const RETRY_DELAY=5000;
 
 function id(){return crypto.randomUUID()}
 function fail(res,e){console.error(e);return res.status(500).json({error:e.message||'Server error'})}
@@ -32,7 +32,7 @@ async function q(promise){const {data,error}=await promise;if(error)throw new Er
 function retryable(e){const s=String(e?.message||e);return /429|quota|RESOURCE_EXHAUSTED|503|UNAVAILABLE|overloaded|timeout|temporar/i.test(s)}
 function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
 async function generateModel(ai,prompt,model,jsonMode=false){const started=Date.now();console.log(`Trying model: ${model}`);const response=await ai.models.generateContent({model,contents:prompt,config:{temperature:jsonMode?0.2:0.7,maxOutputTokens:8192,automaticContinuation:false,...(jsonMode?{responseMimeType:'application/json'}:{}),httpOptions:{timeout:MODEL_TIMEOUT}}});console.log(`SUCCESS: ${model} (${Date.now()-started}ms)`);return {text:response.text||'',model}}
-async function generateWithRetries(ai,prompt,model,jsonMode=false){let lastError;for(let attempt=0;attempt<=MAX_RETRIES_PER_MODEL;attempt++){try{return await generateModel(ai,prompt,model,jsonMode)}catch(e){lastError=e;if(!retryable(e)||attempt===MAX_RETRIES_PER_MODEL)throw e;console.log(`${model} failed (attempt ${attempt+1}/${MAX_RETRIES_PER_MODEL}). Retrying in 3s...`);await sleep(RETRY_DELAY)}}throw lastError}
+async function generateWithRetries(ai,prompt,model,jsonMode=false){let lastError;for(let attempt=0;attempt<=MAX_RETRIES_PER_MODEL;attempt++){try{return await generateModel(ai,prompt,model,jsonMode)}catch(e){lastError=e;if(!retryable(e)||attempt===MAX_RETRIES_PER_MODEL)throw e;console.log(`${model} failed (attempt ${attempt+1}/${MAX_RETRIES_PER_MODEL}). Retrying in 5s...`);await sleep(RETRY_DELAY)}}throw lastError}
 async function runTwoModelTask(ai,prompt,tag){const jsonMode=tag==='GLOSSARY';try{return await generateWithRetries(ai,prompt,MODELS[0],jsonMode)}catch(e){if(!retryable(e))throw e;console.log(`${tag}: 3.1 exhausted after 2 retries. Switching to 3.5.`);return await generateWithRetries(ai,prompt,MODELS[1],jsonMode)}}
 async function runPolishTask(prompt,tag){try{return await runTwoModelTask(aiPolish,prompt,tag)}catch(e){if(!retryable(e)||!aiPolishFallback)throw e;console.log(`${tag}: primary polish API exhausted. Switching to separate polish fallback API.`);return await generateWithRetries(aiPolishFallback,prompt,POLISH_FALLBACK_MODEL,false)}}
 function splitText(text,maxChars=TRANSLATE_CHUNK_SIZE){if(text.length<=maxChars)return [text];const paragraphs=text.split(/\n\s*\n/);const chunks=[];let current='';for(const p of paragraphs){const block=p.trim();if(!block)continue;const candidate=current?current+'\n\n'+block:block;if(candidate.length<=maxChars)current=candidate;else{if(current)chunks.push(current);if(block.length<=maxChars)current=block;else{for(let i=0;i<block.length;i+=maxChars)chunks.push(block.slice(i,i+maxChars));current=''}}}if(current)chunks.push(current);return chunks.filter(Boolean)}
