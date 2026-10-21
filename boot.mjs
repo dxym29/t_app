@@ -118,9 +118,9 @@ function repairMissingNameLocksFromLiteralNames(text,locks){
     const forms=[x.matchedForm,x.original,...(x.aliases||[])].filter(Boolean).sort((a,b)=>b.length-a.length);
     for(const form of forms){
       if(countToken(out,x.token)===1)break;
-      const escaped=String(form).split('').map(ch=>'\\^$.*+?()[]{}|'.includes(ch)?'\\'+ch:ch).join('');
-      const re=new RegExp(escaped,'i');
-      if(re.test(out))out=out.replace(re,x.token);
+      const formText=String(form);
+      const index=out.toLowerCase().indexOf(formText.toLowerCase());
+      if(index>=0)out=out.slice(0,index)+x.token+out.slice(index+formText.length);
     }
   }
   return out;
