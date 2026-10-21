@@ -45,10 +45,11 @@
         let p1;
         try{p1=await translateUntilNonEmpty(label,e)}catch(translateError){
           const translateMessage=String(translateError?.message||translateError);
-          if(translateMessage.startsWith('SKIP_CHAPTER:')||translateError?.code==='CONTENT_BLOCKED'){
+          if(translateMessage.startsWith('SKIP_CHAPTER:')||translateError?.code==='CONTENT_BLOCKED'||translateError?.code==='QUOTA_EXHAUSTED'){
             skipped++;skippedReasons.push('#'+e.number+': '+translateMessage.replace(/^SKIP_CHAPTER:\\s*/,''));
-            $('batchStatus').textContent=label+' • skipped — Gemini content filter';
-            setStatus(label+' skipped by Gemini content filter. Continuing to next chapter...',false);
+            const reason=translateError?.code==='QUOTA_EXHAUSTED'?'all translation APIs are out of quota':'Gemini content filter or chapter block';
+            $('batchStatus').textContent=label+' • skipped — '+reason;
+            setStatus(label+' skipped — '+reason+'. Continuing to next chapter...',false);
             continue;
           }
           throw translateError;
