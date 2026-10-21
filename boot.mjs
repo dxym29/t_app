@@ -48,10 +48,10 @@ source=source.slice(0,start)+replacement+source.slice(end);
 const translateKey=`const aiTranslate=new GoogleGenAI({apiKey:process.env.GEMINI_API_KEY});`;
 const fallbackKey=`const aiTranslateFallbackKey=process.env.GEMINI_TRANSLATE_FALLBACK_API_KEY||'';
 const aiTranslateFallback=aiTranslateFallbackKey?new GoogleGenAI({apiKey:aiTranslateFallbackKey}):null;
-const TRANSLATE_FALLBACK_MODEL=process.env.GEMINI_TRANSLATE_FALLBACK_MODEL||'gemini-3.5-flash-lite';
+const TRANSLATE_FALLBACK_MODEL=process.env.GEMINI_TRANSLATE_FALLBACK_MODEL||'gemini-3.1-flash-lite';
 const aiTranslateFallbackKey2=process.env.GEMINI_TRANSLATE_FALLBACK_API_KEY_2||'';
 const aiTranslateFallback2=aiTranslateFallbackKey2?new GoogleGenAI({apiKey:aiTranslateFallbackKey2}):null;
-const TRANSLATE_FALLBACK_MODEL_2=process.env.GEMINI_TRANSLATE_FALLBACK_MODEL_2||'gemini-3.5-flash-lite';`;
+const TRANSLATE_FALLBACK_MODEL_2=process.env.GEMINI_TRANSLATE_FALLBACK_MODEL_2||'gemini-3.1-flash-lite';`;
 if(!source.includes(translateKey))throw new Error('Primary translation client was not found.');
 source=source.replace(translateKey,fallbackKey+'\n'+translateKey);
 
@@ -133,7 +133,7 @@ const translateReplacement=`app.post('/api/translate',async(req,res)=>{try{
       const expected=new Map(locks.map(x=>[x.token,countToken(lockedChunk,x.token)]));
       let done=false,lastError;
       while(!done){
-        if(stageIndex>=stages.length)throw lastError||new Error('All configured translation APIs are out of quota.');
+        if(stageIndex>=stages.length){const exhausted=new Error('SKIP_CHAPTER: all configured translation APIs/models are out of quota.');exhausted.code='QUOTA_EXHAUSTED';throw exhausted;}
         const stage=stages[stageIndex];
         if(!stage.ai){
           console.warn('TRANSLATE: '+stage.name+' is not configured; skipping to next API stage.');
