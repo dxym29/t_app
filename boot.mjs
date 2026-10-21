@@ -89,6 +89,26 @@ function buildNameLocks(g){
 function termAppears(text,term){const t=String(text||'').toLowerCase(),q=String(term||'').trim().toLowerCase();return !!q&&t.includes(q)}
 function filterGlossaryToSource(g,source){const text=String(source||'');const all=buildNameLocks(g);const active=new Set(all.filter(x=>termAppears(text,x.original)||(x.aliases||[]).some(a=>termAppears(text,a))).map(x=>normalizeNameKey(x.original)));const out={};for(const [type,arr] of Object.entries(g||{}))out[type]=(arr||[]).filter(x=>active.has(normalizeNameKey(String(x.original||'').trim())));return out}
 function lockText(text,locks){let out=String(text||'');const terms=[];for(const x of locks){terms.push({term:x.original,token:x.token});for(const a of x.aliases||[])terms.push({term:a,token:x.token})}terms.sort((a,b)=>b.term.length-a.term.length);for(const x of terms)out=out.split(x.term).join(x.token);return out}
+function lockChunkWithUniqueTokens(text,locks){
+  let out=String(text||''),n=1;
+  const used=[];
+  const terms=[];
+  for(const x of locks){terms.push({term:x.original,lock:x});for(const a of x.aliases||[])terms.push({term:a,lock:x})}
+  terms.sort((a,b)=>b.term.length-a.term.length);
+  for(const item of terms){
+    if(!item.term)continue;
+    const parts=out.split(item.term);
+    if(parts.length<2)continue;
+    let next=parts[0];
+    for(let i=1;i<parts.length;i++){
+      const token='[[NAMELOCK_'+String(n++).padStart(3,'0')+']]';
+      used.push({...item.lock,token,matchedForm:item.term});
+      next+=token+parts[i];
+    }
+    out=next;
+  }
+  return {text:out,locks:used};
+}
 function lockTranslationText(text,locks){let out=String(text||'');const ordered=[...locks].sort((a,b)=>b.translation.length-a.translation.length);for(const x of ordered)out=out.split(x.translation).join(x.token);return out}
 function findNameLockTokens(text){const re=new RegExp('\\\\[\\\\[NAMELOCK_([^\\\\]]+)\\\\]\\\\]','g');return [...String(text||'').matchAll(re)].map(m=>({raw:m[0],label:m[1]}))}
 function repairInventedNameLocks(text,locks){let out=String(text||'');const byLabel=new Map();for(const x of locks){byLabel.set(normalizeNameKey(x.original),x.token);for(const a of x.aliases||[])byLabel.set(normalizeNameKey(a),x.token)}for(const m of findNameLockTokens(out)){if(locks.some(x=>x.token===m.raw))continue;const mapped=byLabel.get(normalizeNameKey(String(m.label||'').replace(/[_-]+/g,' ')));if(!mapped)throw new Error('NameLock validation failed: unknown placeholder '+m.raw);out=out.split(m.raw).join(mapped)}return out}
@@ -128,12 +148,12 @@ const translateReplacement=`app.post('/api/translate',async(req,res)=>{try{
     const workChunks=splitText(source,7000);
     for(let i=0;i<workChunks.length;i++){
       const chunk=workChunks[i],previousSource=i>0?workChunks[i-1].slice(-CONTEXT_OVERLAP):'';
-      const lockedChunk=useLocks?lockText(chunk,locks):chunk;
+      const chunkLockResult=useLocks?lockChunkWithUniqueTokens(chunk,locks):{text:chunk,locks:[]};
+      const lockedChunk=chunkLockResult.text;
+      const chunkLocks=chunkLockResult.locks;
       const lockedPrevious=useLocks?lockText(previousSource,locks):previousSource;
-      const expected=new Map(locks.map(x=>[x.token,countToken(lockedChunk,x.token)]));
-      // Only expose glossary entries whose protected token actually occurs in this chunk.
-      // This avoids asking the model to use tokens for names that are not in the text being translated.
-      const chunkLocks=useLocks?locks.filter(x=>(expected.get(x.token)||0)>0):[];
+      const expected=new Map(chunkLocks.map(x=>[x.token,1]));
+      // Only expose glossary entries whose source names occur in this chunk.
       const chunkGlossary=useLocks?filterGlossaryToSource(glossary,chunk):glossary;
       let done=false,lastError, nameLockAttempts=0;
       while(!done){
@@ -152,10 +172,10 @@ const translateReplacement=`app.post('/api/translate',async(req,res)=>{try{
           let output=String(r.text||'').trim();
           if(!output)throw new Error('Translation model returned empty output.');
           if(useLocks){
-            output=repairInventedNameLocks(output,locks);
+            output=repairInventedNameLocks(output,chunkLocks);
             const valid=validateLockedOutput(output,chunkLocks,expected);
             if(!valid){
-              const mismatches=chunkLocks.map(x=>({token:x.token,expected:expected.get(x.token)||0,actual:countToken(output,x.token)})).filter(x=>x.expected!==x.actual);
+              const mismatches=chunkLocks.map(x=>({token:x.token,expected:1,actual:countToken(output,x.token),sourceTerm:x.original})).filter(x=>x.actual!==1);
               nameLockAttempts++;
               console.warn('TRANSLATE: NameLock token mismatch for chunk '+(i+1)+'/'+workChunks.length+': '+JSON.stringify(mismatches));
               if(nameLockAttempts<3){
@@ -165,7 +185,7 @@ const translateReplacement=`app.post('/api/translate',async(req,res)=>{try{
               }
               throw new Error('NameLock validation failed after 3 actual translation attempts.');
             }
-            output=restoreNameLocks(output,locks);
+            output=restoreNameLocks(output,chunkLocks);
           }else if(/\\[\\[NAMELOCK_[^\\]]+\\]\\]/i.test(output)){
             throw new Error('Translation output unexpectedly contains a NameLock placeholder.');
           }
