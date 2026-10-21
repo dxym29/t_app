@@ -42,7 +42,17 @@
         const e=await runUntilSuccess(label,'Loading',()=>getFullEpisode(meta.id));setEpisodeUI(e);
         if(!String(e.source||'').trim()){skipped++;emptySkipped++;skippedReasons.push(`#${e.number}: source is empty`);$('batchStatus').textContent=`${label} • skipped — source data is empty`;setStatus(`${label} skipped — source data is empty. Continuing batch...`,false);continue}
         $('batchStatus').textContent=`${label} • Phase 1 Translate...`;
-        const p1=await translateUntilNonEmpty(label,e);
+        let p1;
+        try{p1=await translateUntilNonEmpty(label,e)}catch(translateError){
+          const translateMessage=String(translateError?.message||translateError);
+          if(translateMessage.startsWith('SKIP_CHAPTER:')||translateError?.code==='CONTENT_BLOCKED'){
+            skipped++;skippedReasons.push('#'+e.number+': '+translateMessage.replace(/^SKIP_CHAPTER:\\s*/,''));
+            $('batchStatus').textContent=label+' • skipped — Gemini content filter';
+            setStatus(label+' skipped by Gemini content filter. Continuing to next chapter...',false);
+            continue;
+          }
+          throw translateError;
+        }
         $('translation').value=p1.translation;$('polishedTranslation').value='';currentEpisode.translation=p1.translation;updateStats();
         let finalText=p1.translation;
         try{$('batchStatus').textContent=`${label} • Phase 2 Polish...`;const p2=await api('/api/polish',{method:'POST',body:JSON.stringify({novelId:currentNovel.id,episodeId:e.id,translation:p1.translation})});if(!String(p2.translation||'').trim())throw new Error('Polish returned empty output.');finalText=p2.translation;$('polishedTranslation').value=finalText;updateStats()}catch(polishError){polishSkipped++;polishErrors.push(`#${e.number}: ${polishError.message||'Polish failed'}`);finalText=p1.translation;$('polishedTranslation').value='';updateStats();$('batchStatus').textContent=`${label} • Phase 2 error → skipping Polish, saving Pass 1...`}
