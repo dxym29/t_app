@@ -135,7 +135,7 @@ const translateReplacement=`app.post('/api/translate',async(req,res)=>{try{
               const r=await generateModel(provider.ai,masterPrompt({
                 style:novel.style,glossary,locks:[],source:plainChunk,
                 previousTail:plainResult.slice(-5000),sourceContext:previousSource
-              }),model);
+              }).replace('NAME LOCK is active. Every [[NAMELOCK_###]] token already present in SOURCE is protected. Copy it EXACTLY. NEVER create any [[NAMELOCK_...]] token yourself. If a name is not represented by a protected token, output the name normally. Never invent placeholders. Never translate, alter, remove, split, duplicate, or paraphrase a protected token.','NAME LOCK is disabled for this chapter after validation failure. Translate names naturally and consistently using the glossary. Do not output any placeholder tokens.'),model);
               const output=String(r.text||'').trim();
               if(!output)throw new Error('Translation model returned empty output.');
               if(/\\[\\[NAMELOCK_[^\\]]+\\]\\]/i.test(output))throw new Error('Translation output unexpectedly contains a NameLock placeholder.');
