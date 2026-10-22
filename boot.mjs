@@ -155,8 +155,10 @@ const translateReplacement=`app.post('/api/translate',async(req,res)=>{try{
   const stages=[
     {name:'primary',ai:aiTranslate,model:'gemini-3.1-flash-lite'},
     {name:'primary',ai:aiTranslate,model:'gemini-3.5-flash-lite'},
-    {name:'fallback-1',ai:aiTranslateFallback,model:TRANSLATE_FALLBACK_MODEL||'gemini-3.1-flash-lite'},
-    {name:'fallback-2',ai:aiTranslateFallback2,model:TRANSLATE_FALLBACK_MODEL_2||'gemini-3.1-flash-lite'}
+    {name:'fallback-1',ai:aiTranslateFallback,model:'gemini-3.1-flash-lite'},
+    {name:'fallback-1',ai:aiTranslateFallback,model:'gemini-3.5-flash-lite'},
+    {name:'fallback-2',ai:aiTranslateFallback2,model:'gemini-3.1-flash-lite'},
+    {name:'fallback-2',ai:aiTranslateFallback2,model:'gemini-3.5-flash-lite'}
   ];
   const isQuota=e=>/429|RESOURCE_EXHAUSTED|quota exceeded|quota exhausted|rate.?limit|GenerateRequestsPerDayPerModel|retryDelay/i.test(String(e?.message||e));
   const isBlocked=e=>/PROHIBITED_CONTENT|prompt.?block|safety.?block|blocked by Gemini safety filter/i.test(String(e?.message||e));
@@ -174,7 +176,7 @@ const translateReplacement=`app.post('/api/translate',async(req,res)=>{try{
       const expected=new Map(chunkLocks.map(x=>[x.token,1]));
       // Only expose glossary entries whose source names occur in this chunk.
       const chunkGlossary=useLocks?filterGlossaryToSource(glossary,chunk):glossary;
-      let done=false,lastError, nameLockAttempts=0;
+      let done=false,lastError, nameLockAttempts=0,emptyOutputAttempts=0,lastEmptyOutputStage=-1;
       while(!done){
         if(stageIndex>=stages.length){const exhausted=new Error('SKIP_CHAPTER: all configured translation APIs/models are out of quota.');exhausted.code='QUOTA_EXHAUSTED';throw exhausted;}
         const stage=stages[stageIndex];
@@ -229,6 +231,19 @@ const translateReplacement=`app.post('/api/translate',async(req,res)=>{try{
           if(isQuota(e)){
             console.warn('TRANSLATE: '+stage.name+' / '+stage.model+' quota exceeded; moving to next configured model/API stage.');
             stageIndex++;
+            continue;
+          }
+          if(/empty model output|returned empty output/i.test(String(e?.message||e))){
+            if(lastEmptyOutputStage!==stageIndex){lastEmptyOutputStage=stageIndex;emptyOutputAttempts=0;}
+            emptyOutputAttempts++;
+            if(emptyOutputAttempts<2){
+              console.warn('TRANSLATE: '+stage.name+' / '+stage.model+' returned empty output; retry '+emptyOutputAttempts+'/1 in 3s.');
+              await sleep(3000);
+              continue;
+            }
+            console.warn('TRANSLATE: '+stage.name+' / '+stage.model+' returned empty output twice; moving to next configured model/API stage.');
+            stageIndex++;
+            emptyOutputAttempts=0;
             continue;
           }
           console.error('TRANSLATE: '+stage.name+' / '+stage.model+' chunk '+(i+1)+'/'+workChunks.length+' failed: '+String(e?.message||e)+'. Retrying same model in 3s because error is not quota-related.');
