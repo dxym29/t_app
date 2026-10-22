@@ -3,8 +3,8 @@
   "version": "2.0.0",
   "type": "module",
   "scripts": {
-    "dev": "node --import ./gemini-safety.mjs --watch boot.mjs",
-    "start": "node --import ./gemini-safety.mjs boot.mjs"
+    "dev": "node --import ./phase1-quota-fallback.mjs --import ./gemini-safety.mjs --watch boot.mjs",
+    "start": "node --import ./phase1-quota-fallback.mjs --import ./gemini-safety.mjs boot.mjs"
   },
   "dependencies": {
     "@google/genai": "^1.20.0",
