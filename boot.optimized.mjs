@@ -8,10 +8,13 @@ const patchedPath = path.join(root, '.boot.optimized.runtime.mjs');
 
 let source = await fs.readFile(originalPath, 'utf8');
 
-// Phase 1: use 12,000-character chunks everywhere the existing runtime patch
-// hard-coded 7,000. Keep the existing paragraph-aware splitter and safety
-// fallback behavior unchanged.
+// Phase 1 optimization: make the runtime use 12,000-character chunks everywhere.
 source = source.replaceAll('splitText(source,7000)', 'splitText(source,12000)');
+
+// Also override the base server constants before boot.mjs writes server.runtime.mjs.
+const serverChunkPatch = `const CHUNK_SIZES={'gemini-3.1-flash-lite':12000,'gemini-3.5-flash-lite':12000};\nconst TRANSLATE_CHUNK_SIZE=12000;`;
+const oldServerChunkPatch = `const CHUNK_SIZES={'gemini-3.1-flash-lite':10000,'gemini-3.5-flash-lite':10000};\nconst TRANSLATE_CHUNK_SIZE=10000;`;
+source = source.replace(oldServerChunkPatch, serverChunkPatch);
 
 // NameLock optimization: if validation fails for a chunk, do not spend two
 // more NameLock attempts and do not restart the whole chapter. Re-run only
