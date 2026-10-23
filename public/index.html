@@ -9,8 +9,7 @@
 <body>
 <main class="wrap">
   <header>
-    <h1>Webnovel Translator</h1>
-    <p>Gemini + Supabase • iPhone friendly</p>
+    <div class="row" style="align-items:center;justify-content:space-between;gap:12px"><div><h1>Webnovel Translator</h1><p>Gemini + Supabase • iPhone friendly</p></div><div id="apiUsageBox" class="apiUsageBox" title="Gemini generateContent requests used today">API today: 0</div></div>
   </header>
 
   <section class="card">
@@ -45,5 +44,17 @@
 <script src="/app.js?v=20261014-2"></script>
 <script src="/series.js?v=20261014-1"></script>
 <script src="/batch.js?v=20261014-2"></script>
+<script>
+(async()=>{
+  const box=document.getElementById('apiUsageBox');
+  async function refreshApiUsage(){
+    try{const r=await fetch('/api/usage',{cache:'no-store'});const j=await r.json();box.textContent=`API today: ${Number(j.count||0).toLocaleString()}`;box.title=`Gemini API calls today • resets at 00:00 (${j.timezone||'Asia/Bangkok'})`}
+    catch{box.textContent='API today: —'}
+  }
+  await refreshApiUsage();
+  setInterval(refreshApiUsage,15000);
+  window.addEventListener('focus',refreshApiUsage);
+})();
+</script>
 </body>
 </html>
