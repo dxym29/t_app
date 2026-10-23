@@ -9,7 +9,7 @@
 <body>
 <main class="wrap">
   <header>
-    <div class="row" style="align-items:center;justify-content:space-between;gap:12px"><div><h1>Webnovel Translator</h1><p>Gemini + Supabase • iPhone friendly</p></div><div id="apiUsageBox" class="apiUsageBox" title="Gemini generateContent requests used today">API today: 0</div></div>
+    <div class="row" style="align-items:center;justify-content:space-between;gap:12px"><div><h1>Webnovel Translator</h1><p>Gemini + Supabase • iPhone friendly</p></div><button id="apiUsageBox" class="apiUsageBox" type="button" title="Click to refresh today's Gemini API request count">API today: —</button></div>
   </header>
 
   <section class="card">
@@ -51,9 +51,8 @@
     try{const r=await fetch('/api/usage',{cache:'no-store'});const j=await r.json();box.textContent=`API today: ${Number(j.count||0).toLocaleString()}`;box.title=`Gemini API calls today • resets at 00:00 (${j.timezone||'Asia/Bangkok'})`}
     catch{box.textContent='API today: —'}
   }
-  await refreshApiUsage();
-  setInterval(refreshApiUsage,15000);
-  window.addEventListener('focus',refreshApiUsage);
+  box.addEventListener('click',refreshApiUsage);
+  refreshApiUsage();
 })();
 </script>
 </body>
