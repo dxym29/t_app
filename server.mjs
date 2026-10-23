@@ -65,4 +65,77 @@ app.delete('/api/glossary/:novelId/:type/:id',async(req,res)=>{try{await q(supab
 app.get('/api/episodes/:novelId',async(req,res)=>{try{res.json(await q(supabase.from('episodes').select('*').eq('novel_id',req.params.novelId).order('number')))}catch(e){fail(res,e)}});
 app.get('/api/episodes/:novelId/list',async(req,res)=>{try{res.json(await q(supabase.from('episodes').select('id,novel_id,number,title,status,model,updated_at').eq('novel_id',req.params.novelId).order('number')))}catch(e){fail(res,e)}});
 app.get('/api/episodes/:novelId/:id',async(req,res)=>{try{res.json(await q(supabase.from('episodes').select('*').eq('novel_id',req.params.novelId).eq('id',req.params.id).single()))}catch(e){fail(res,e)}});
-app.post('/api/episodes/:novelId',async(req,res)=>{try{const row=await q(supabase.from('episodes').insert({novel_id:req.params.novelId,number:req.body.number,title:req.body.title||'',source:req.body.source||'',translation:req.body.translation||'',status:req.body.status||'draft'}).select().single());res.json(row)}catch(e){fail(res,e)}});
+app.post('/api/episodes/:novelId',async(req,res)=>{try{res.json(await q(supabase.from('episodes').insert({novel_id:req.params.novelId,number:req.body.number,title:req.body.title||'',source:req.body.source||'',translation:req.body.translation||'',status:'draft'}).select().single()))}catch(e){fail(res,e)}});
+app.put('/api/episodes/:novelId/:id',async(req,res)=>{try{res.json(await q(supabase.from('episodes').update({number:req.body.number,title:req.body.title,source:req.body.source,translation:req.body.translation,status:req.body.status||'draft',updated_at:new Date().toISOString()}).eq('novel_id',req.params.novelId).eq('id',req.params.id).select().single()))}catch(e){fail(res,e)}});
+app.delete('/api/episodes/:novelId/:id',async(req,res)=>{try{await q(supabase.from('episodes').delete().eq('novel_id',req.params.novelId).eq('id',req.params.id));res.json({ok:true})}catch(e){fail(res,e)}});
+
+app.post('/api/fetch-chapter',async(req,res)=>{try{const {url}=req.body;if(!url?.trim())return res.status(400).json({error:'Chapter URL is required'});const result=await fetchNovelPingChapter(url.trim());res.json(result)}catch(e){fail(res,e)}});
+
+app.post('/api/translate',async(req,res)=>{try{const {novelId,episodeId,source}=req.body;if(!novelId||!source?.trim())return res.status(400).json({error:'Novel and source are required'});const novel=await q(supabase.from('novels').select('*').eq('id',novelId).single());const allGlossary=await getGlossary(novelId);const glossary=filterGlossaryToSource(allGlossary,source);const locks=buildNameLocks(glossary);let activeModel=MODELS[0],chunks=splitText(source,TRANSLATE_CHUNK_SIZE),result='',modelUsed=activeModel;for(let i=0;i<chunks.length;i++){const chunk=chunks[i],previousSource=chunks[i-1]?chunks[i-1].slice(-CONTEXT_OVERLAP):'',lockedChunk=lockText(chunk,locks),lockedPreviousSource=lockText(previousSource,locks);try{const r=await generateWithRetries(aiTranslate,masterPrompt({style:novel.style,glossary,locks,source:lockedChunk,previousTail:result.slice(-5000),sourceContext:lockedPreviousSource}),activeModel);result+=(result?'\n\n':'')+restoreNameLocks(r.text.trim(),locks);modelUsed=r.model}catch(e){if(!retryable(e))throw e;if(activeModel===MODELS[0]){activeModel=MODELS[1];const remaining=chunks.slice(i).join('\n\n');chunks=chunks.slice(0,i).concat(splitText(remaining,TRANSLATE_CHUNK_SIZE));i--;continue}throw e}}if(episodeId)await q(supabase.from('episodes').update({source,translation:result,model:modelUsed,status:'translated',updated_at:new Date().toISOString()}).eq('id',episodeId).eq('novel_id',novelId));res.json({translation:result,model:modelUsed,sourceChars:countChars(source),pass1Chars:countChars(result)})}catch(e){fail(res,e)}});
+
+function parseGlossaryJson(text){const raw=String(text||'').trim().replace(/^\uFEFF/,'').replace(/^\`\`\`(?:json)?\s*/i,'').replace(/\s*\`\`\`$/,'').trim();try{return JSON.parse(raw)}catch(firstError){const start=raw.indexOf('{');if(start<0)throw firstError;let depth=0,inString=false,escaped=false;for(let i=start;i<raw.length;i++){const ch=raw[i];if(inString){if(escaped)escaped=false;else if(ch==='\\')escaped=true;else if(ch==='"')inString=false;continue}if(ch==='"'){inString=true;continue}if(ch==='{')depth++;else if(ch==='}'&&--depth===0){const candidate=raw.slice(start,i+1);try{return JSON.parse(candidate)}catch{return JSON.parse(candidate.replace(/,\s*([}\]])/g,'$1'))}}}throw firstError}}
+app.post('/api/extract-glossary',async(req,res)=>{try{const {source}=req.body;if(!source?.trim())return res.status(400).json({error:'Source is required'});const r=await runTwoModelTask(aiGlossary,glossaryPrompt(source),'GLOSSARY');let data;try{data=parseGlossaryJson(r.text)}catch{throw new Error('Glossary AI returned invalid JSON. Please try again.')}if(!validateGlossaryObject(data))throw new Error('Glossary AI returned an invalid format.');res.json({glossary:data,model:r.model,sourceChars:countChars(source)})}catch(e){fail(res,e)}});
+
+app.post('/api/polish',async(req,res)=>{try{const {novelId,episodeId,translation}=req.body;if(!novelId||!translation?.trim())return res.status(400).json({error:'Novel and translation are required'});let episodeSource='';if(episodeId){const episode=await q(supabase.from('episodes').select('source').eq('id',episodeId).eq('novel_id',novelId).single());episodeSource=episode?.source||''}const allGlossary=await getGlossary(novelId);const glossary=episodeSource?filterGlossaryToSource(allGlossary,episodeSource):allGlossary;const locks=buildNameLocks(glossary);const locked=lockTranslationText(translation,locks);const expected=new Map();for(const x of locks)expected.set(x.token,countToken(locked,x.token));let r=await runPolishTask(polishPrompt(locked,false),'POLISH');if(!validateLockedOutput(r.text,locks,expected))throw new Error('Polish validation failed: a protected name/term changed. The original translation was not replaced.');let polished=restoreNameLocks(r.text.trim(),locks);if(normalizeForCompare(polished)===normalizeForCompare(translation)){console.log('POLISH: output unchanged after first attempt. Running one stronger editorial pass.');r=await runPolishTask(polishPrompt(locked,true),'POLISH-REVISE');if(!validateLockedOutput(r.text,locks,expected))throw new Error('Polish validation failed: a protected name/term changed during the revision pass. The original translation was not replaced.');polished=restoreNameLocks(r.text.trim(),locks)}res.json({translation:polished,model:r.model,pass1Chars:countChars(translation),pass2Chars:countChars(polished),changed:normalizeForCompare(polished)!==normalizeForCompare(translation)})}catch(e){fail(res,e)}});
+
+function slugify(value){return String(value||'novel').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Za-z0-9]+/g,'-').replace(/^-+|-+$/g,'').toLowerCase()||'novel'}
+function excelValue(value){return value==null?'':String(value)}
+async function fetchExportRows(table, columns, novelId, orderColumn, batchSize=25){
+  const rows=[];
+  for(let start=0;;start+=batchSize){
+    const batch=await q(supabase.from(table).select(columns).eq('novel_id',novelId).order(orderColumn).range(start,start+batchSize-1));
+    rows.push(...batch);
+    if(batch.length<batchSize)break;
+  }
+  return rows;
+}
+async function buildTemplateWorkbook(novelId){
+  const novel=await q(supabase.from('novels').select('id,name,style').eq('id',novelId).single());
+  const glossary=await fetchExportRows('glossary_terms','original,translation,type,note,voice',''+novelId,'created_at',100);
+  const episodes=(await q(supabase.from('episodes').select('number,title,source,translation').eq('novel_id',''+novelId))).sort((a,b)=>Number(a.number)-Number(b.number));
+  const wb=new ExcelJS.Workbook();
+  wb.creator='Webnovel Translator';
+  wb.created=new Date();
+  const headerFill={type:'pattern',pattern:'solid',fgColor:{argb:'FF4338CA'}};
+  const headerFont={bold:true,color:{argb:'FFFFFFFF'}};
+  const guide=wb.addWorksheet('Guide');
+  guide.addRow(['MM Novel workbook','Guidance']);
+  guide.addRow(['Novel sheet','Keep the field/value columns. Add one value per field. Slug must use Latin letters. Existing genre names may be separated with |.']);
+  guide.addRow(['Chapters sheet','One chapter per row. Keep chapterNo unique. Enter sourceContent, translatedContent, or both. Set publishImmediately to TRUE only when the Burmese translation is ready to publish.']);
+  guide.addRow(['Glossary sheet','One term per row. sourceTerm and translatedTerm are required; add character voice, cultivation level, realm, or notes in the other columns.']);
+  guide.addRow(['Import','Use .xlsx files. Keep all sheet names and column headers unchanged. Import creates a new novel; it will not overwrite an existing novel.']);
+  guide.columns=[{width:25},{width:115}];
+  guide.views=[{state:'frozen',ySplit:1}];
+  guide.getRow(1).eachCell(c=>{c.fill=headerFill;c.font=headerFont;});
+  guide.eachRow((row,n)=>{row.height=n===1?22:34;row.eachCell((cell,col)=>{cell.alignment={vertical:'top',wrapText:true};if(n>1&&col===1)cell.font={bold:true};});});
+  const ns=wb.addWorksheet('Novel');
+  ns.addRow(['field','value']);
+  for(const row of [['title',excelValue(novel.name)],['slug',slugify(novel.name)],['originalTitle',''],['author',''],['description',''],['coverUrl',''],['sourceLanguage','zh'],['translationGenre','general'],['translationTone','natural'],['translationNamePolicy','consistent'],['translationInstructions',excelValue(novel.style)],['status','ONGOING'],['isPublished','false'],['genres','']])ns.addRow(row);
+  ns.columns=[{width:30},{width:70}];
+  ns.views=[{state:'frozen',ySplit:1}];
+  ns.autoFilter='A1:B1';
+  const cs=wb.addWorksheet('Chapters');
+  cs.addRow(['chapterNo','title','sourceLanguage','sourceContent','translatedTitle','translatedContent','publishImmediately']);
+  for(const [index,e] of episodes.entries())cs.addRow([index+1,excelValue(e.title),'zh',excelValue(e.source),'',excelValue(e.translation),'FALSE']);
+  cs.columns=[{width:14},{width:28},{width:18},{width:72},{width:28},{width:72},{width:22}];
+  cs.views=[{state:'frozen',ySplit:1}];
+  cs.autoFilter='A1:G1';
+  const gs=wb.addWorksheet('Glossary');
+  gs.addRow(['sourceTerm','translatedTerm','termType','note','characterVoice']);
+  for(const x of glossary)gs.addRow([excelValue(x.original),excelValue(x.translation),excelValue(x.type),excelValue(x.note),excelValue(x.voice)]);
+  gs.columns=[{width:28},{width:32},{width:20},{width:48},{width:42}];
+  gs.views=[{state:'frozen',ySplit:1}];
+  gs.autoFilter='A1:E1';
+  for(const ws of [ns,cs,gs]){
+    ws.getRow(1).eachCell(cell=>{cell.fill=headerFill;cell.font=headerFont;cell.alignment={vertical:'center',wrapText:true};});
+    ws.getRow(1).height=24;
+    ws.eachRow((row,rowNumber)=>{if(rowNumber>1)row.eachCell(cell=>{cell.alignment={vertical:'top',wrapText:true};});});
+  }
+  return wb;
+}
+app.get('/api/export/template/:id',async(req,res)=>{try{const wb=await buildTemplateWorkbook(req.params.id);const buffer=await wb.xlsx.writeBuffer();const novel=await q(supabase.from('novels').select('name').eq('id',req.params.id).single());res.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');res.setHeader('Content-Disposition',`attachment; filename="${slugify(novel.name)}-mm-novel.xlsx"`);res.setHeader('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate');res.setHeader('Pragma','no-cache');res.setHeader('Expires','0');res.setHeader('X-Workbook-Export-Version','chapter-sequence-v2');res.send(Buffer.from(buffer))}catch(e){fail(res,e)}});
+async function exportNovel(novelId){const novel=await q(supabase.from('novels').select('*').eq('id',novelId).single());const glossary=await q(supabase.from('glossary_terms').select('*').eq('novel_id',novelId));const episodes=await q(supabase.from('episodes').select('*').eq('novel_id',novelId).order('number'));return {version:2,exportedAt:new Date().toISOString(),novels:[novel],glossary,episodes}}
+app.get('/api/export/novel/:id',async(req,res)=>{try{res.setHeader('Content-Disposition','attachment; filename=novel-backup.json');res.json(await exportNovel(req.params.id))}catch(e){fail(res,e)}});
+app.get('/api/export/all',async(_,res)=>{try{const novels=await q(supabase.from('novels').select('*').order('created_at'));const glossary=await q(supabase.from('glossary_terms').select('*'));const episodes=await q(supabase.from('episodes').select('*').order('novel_id,number'));res.setHeader('Content-Disposition','attachment; filename=webnovel-backup.json');res.json({version:2,exportedAt:new Date().toISOString(),novels,glossary,episodes})}catch(e){fail(res,e)}});
+app.post('/api/import',async(req,res)=>{try{const d=req.body;if(!Array.isArray(d.novels))throw new Error('Invalid backup');let ec=0;for(const n of d.novels){const existing=await q(supabase.from('novels').select('id').eq('id',n.id).maybeSingle());if(existing)await q(supabase.from('novels').update({name:n.name,style:n.style||'',updated_at:new Date().toISOString()}).eq('id',n.id));else await q(supabase.from('novels').insert({id:n.id,name:n.name,style:n.style||''}))}if(Array.isArray(d.glossary)&&d.glossary.length)await q(supabase.from('glossary_terms').upsert(d.glossary.map(x=>({id:x.id,novel_id:x.novel_id,type:x.type,original:x.original,translation:x.translation,note:x.note||'',voice:x.voice||''})),{onConflict:'id'}));if(Array.isArray(d.episodes)&&d.episodes.length){await q(supabase.from('episodes').upsert(d.episodes.map(x=>({id:x.id,novel_id:x.novel_id,number:x.number,title:x.title||'',source:x.source||'',translation:x.translation||'',model:x.model||'',status:x.status||'draft',created_at:x.created_at||new Date().toISOString(),updated_at:x.updated_at||new Date().toISOString()})),{onConflict:'id'}));ec=d.episodes.length}res.json({novels:d.novels.length,episodes:ec})}catch(e){fail(res,e)}});
+app.listen(PORT,'0.0.0.0',()=>console.log(`Webnovel Translator running on port ${PORT}`));
