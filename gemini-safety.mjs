@@ -12,6 +12,25 @@ const safetySettings = [
 const PROHIBITED_MIN_CHARS = 1000;
 const PROHIBITED_MAX_SPLIT_DEPTH = 3;
 
+// In-memory Gemini API request counter. No database/storage is used.
+// The counter is keyed to Asia/Bangkok calendar days and resets automatically
+// when the first request/status check after 00:00 detects a new day.
+function usageDayKey(){
+  return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Bangkok',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+}
+if(!globalThis.__geminiApiUsage)globalThis.__geminiApiUsage={day:usageDayKey(),count:0};
+function getGeminiApiUsage(){
+  const day=usageDayKey();
+  if(globalThis.__geminiApiUsage.day!==day)globalThis.__geminiApiUsage={day,count:0};
+  return globalThis.__geminiApiUsage;
+}
+function countGeminiApiCall(){
+  const usage=getGeminiApiUsage();
+  usage.count+=1;
+  return usage.count;
+}
+globalThis.getGeminiApiUsage=getGeminiApiUsage;
+
 function isGeminiGenerateRequest(url) {
   return /generativelanguage\.googleapis\.com\/.*:generateContent(?:\?|$)/i.test(String(url || ''));
 }
@@ -87,6 +106,7 @@ function makeCombinedResponse(baseJson, text) {
 
 async function fetchGemini(url, init, json) {
   json.safetySettings = safetySettings;
+  countGeminiApiCall();
   const headers = new Headers(init?.headers || (typeof Request !== 'undefined' && init?.body === undefined ? undefined : undefined));
   headers.set('content-type', 'application/json');
   return originalFetch(url, { ...init, method: 'POST', headers, body: JSON.stringify(json) });
@@ -167,3 +187,4 @@ globalThis.fetch = async (input, init = {}) => {
 
 console.log('Gemini request compatibility wrapper enabled.');
 console.log('Phase 1 PROHIBITED_CONTENT chunks will be reduced only after a prohibited response.');
+console.log(`Gemini API usage counter initialized for ${usageDayKey()} (Asia/Bangkok).`);
