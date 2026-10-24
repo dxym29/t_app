@@ -21,11 +21,9 @@ if(!source.includes(bootReadLine))throw new Error('Could not locate boot.mjs sou
 source = source.replace(bootReadLine, bootReadLine+'\n'+serverPatchInjection);
 
 // Raw web-novel cleanup: use the existing glossary Gemini API/client and the
-// same two models before the translation endpoint sees fetched text. This is
-// runtime-only so the existing fetcher, database, translation, polish, and UI
-// code remain unchanged.
+// same two models. The FULL fetched raw chapter is sent in ONE cleaning call;
+// no cleaning chunk size is applied. Translation chunking remains unchanged.
 const rawCleanHelper = `
-const RAW_CLEAN_CHUNK_SIZE=12000;
 function rawCleanPrompt(raw){return \`You are a professional web novel editor.
 Below is a raw text extracted from a web novel site. It contains unwanted site scripts, watermarks, navigation buttons, ads, and broken English MTL.
 YOUR TASKS:
@@ -39,15 +37,10 @@ Return ONLY the cleaned and polished English story text.
 RAW TEXT:
 \${raw}\`}
 async function cleanFetchedRawText(raw){
-  const chunks=splitText(String(raw||''),RAW_CLEAN_CHUNK_SIZE);
-  const cleaned=[];
-  for(let i=0;i<chunks.length;i++){
-    const r=await runTwoModelTask(aiGlossary,rawCleanPrompt(chunks[i]),'RAW_CLEAN');
-    const text=String(r.text||'').trim();
-    if(!text)throw new Error('Raw cleaning AI returned empty output for chunk '+(i+1)+'/'+chunks.length+'.');
-    cleaned.push(text);
-  }
-  return cleaned.join('\\n\\n').trim();
+  const r=await runTwoModelTask(aiGlossary,rawCleanPrompt(String(raw||'')),'RAW_CLEAN');
+  const text=String(r.text||'').trim();
+  if(!text)throw new Error('Raw cleaning AI returned empty output.');
+  return text;
 }
 `;
 const fetchMarker=`app.post('/api/fetch-chapter',async(req,res)=>{try{const {url}=req.body;if(!url?.trim())return res.status(400).json({error:'Chapter URL is required'});const result=await fetchNovelPingChapter(url.trim());res.json(result)}catch(e){fail(res,e)}});`;
