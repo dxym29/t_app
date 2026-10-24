@@ -218,14 +218,9 @@ const translateReplacement=`app.post('/api/translate',async(req,res)=>{try{
         }catch(e){
           lastError=e;
           if(isBlocked(e)){
-            console.warn('TRANSLATE: '+stage.name+' / '+stage.model+' safety-filtered chunk '+(i+1)+'/'+workChunks.length+'; trying the next configured model/API stage.');
-            stageIndex++;
-            if(stageIndex>=stages.length){
-              const msg='SKIP_CHAPTER: all configured translation models/APIs safety-filtered chunk '+(i+1)+'/'+workChunks.length+'.';
-              console.warn('TRANSLATE: '+msg);
-              const blocked=new Error(msg);blocked.code='CONTENT_BLOCKED';throw blocked;
-            }
-            continue;
+            const msg='SKIP_CHAPTER: PROHIBITED_CONTENT in chunk '+(i+1)+'/'+workChunks.length+'; no retry or fallback attempted.';
+            console.warn('TRANSLATE: '+msg);
+            const blocked=new Error(msg);blocked.code='CONTENT_BLOCKED';throw blocked;
           }
           if(isLock(e)&&useLocks)throw e;
           if(isQuota(e)){
