@@ -10,8 +10,26 @@
   function updateEpisodeMeta(e){const i=episodes.findIndex(x=>x.id===e.id);const meta={id:e.id,novel_id:e.novel_id,number:e.number,title:e.title||'',status:e.status||'translated',model:e.model||'',updated_at:e.updated_at||''};if(i>=0)episodes[i]=meta;else episodes.push(meta);episodes.sort((a,b)=>Number(a.number)-Number(b.number));$('episodeSelect').innerHTML=episodes.map(x=>`<option value="${x.id}">#${x.number} ${esc(x.title||'')}</option>`).join('');$('episodeSelect').value=e.id;renderEpisodes()}
   async function getFullEpisode(id){return await api(`/api/episodes/${currentNovel.id}/${id}`)}
   async function saveBatchEpisode(e,translation){const saved=await api(`/api/episodes/${currentNovel.id}/${e.id}`,{method:'PUT',body:JSON.stringify({number:Number(e.number),title:e.title||'',source:e.source||'',translation,status:'translated'})});updateEpisodeMeta(saved);currentEpisode=saved;return saved}
-  async function runUntilSuccess(label,phase,fn){let attempt=0;while(true){attempt++;try{return await fn()}catch(error){const message=String(error?.message||error);if(/PROHIBITED_CONTENT|prompt.?block|safety.?block/i.test(message)){const note=`${label} • ${phase} stopped: Gemini blocked this content (PROHIBITED_CONTENT). This is not a transient API error, so automatic retries were stopped. Review the source text or model safety response, then retry manually if appropriate.`;$('batchStatus').textContent=note;setStatus(note,false);throw error}const quota=isQuotaError(error);const delay=RETRY_DELAY;$('batchStatus').textContent=`${label} • ${phase} error (attempt ${attempt}${quota?' • quota/rate limit':''}) • retrying in ${delay/1000}s...`;
-      setStatus(`${label} • ${phase} failed${quota?' (quota/rate limit)':''}. Retrying automatically (${attempt})...`,false);await sleep(delay)}}}
+  async function runUntilSuccess(label,phase,fn){
+    let attempt=0;
+    while(attempt<3){
+      attempt++;
+      try{return await fn()}
+      catch(error){
+        const message=String(error?.message||error);
+        if(/PROHIBITED_CONTENT|prompt.?block|safety.?block/i.test(message)){
+          const note=`${label} • ${phase} blocked by Gemini PROHIBITED_CONTENT; skipping this chapter without retry.`;
+          $('batchStatus').textContent=note;setStatus(note,false);throw error;
+        }
+        if(attempt>=3)throw error;
+        const quota=isQuotaError(error),delay=RETRY_DELAY;
+        $('batchStatus').textContent=`${label} • ${phase} error (attempt ${attempt}/3${quota}?' • quota/rate limit':''}) • retrying in ${delay/1000}s...`;
+        setStatus(`${label} • ${phase} failed${quota}?' (quota/rate limit)':''}. Retry ${attempt}/3...`,false);
+        await sleep(delay);
+      }
+    }
+    throw new Error(`${label} • ${phase} failed after 3 attempts.`);
+  }
   async function translateUntilNonEmpty(label,e){
     return await runUntilSuccess(label,'Phase 1 Translate',async()=>{
       const p1=await api('/api/translate',{method:'POST',body:JSON.stringify({novelId:currentNovel.id,episodeId:e.id,source:e.source})});
@@ -41,7 +59,25 @@
         const meta=chapters[i];const label=`Chapter ${meta.number} (${i+1}/${chapters.length})`;$('batchStatus').textContent=`${label} • Loading...`;setStatus(`${label} • Loading source...`,true);
         const e=await runUntilSuccess(label,'Loading',()=>getFullEpisode(meta.id));setEpisodeUI(e);
         if(!String(e.source||'').trim()){skipped++;emptySkipped++;skippedReasons.push(`#${e.number}: source is empty`);$('batchStatus').textContent=`${label} • skipped — source data is empty`;setStatus(`${label} skipped — source data is empty. Continuing batch...`,false);continue}
-        $('batchStatus').textContent=`${label} • Phase 1 Translate...`;
+        $('batchStatus').textContent=`${label} • English cleanup / filter (Glossary API)...`;
+        try{
+          const cleaned=await runUntilSuccess(label,'English cleanup / filter',()=>api('/api/clean-chapter',{method:'POST',body:JSON.stringify({source:e.source})}));
+          const cleanedSource=String(cleaned?.source||'').trim();
+          if(!cleanedSource)throw new Error('Glossary API English cleanup returned empty text.');
+          e.source=cleanedSource;
+          $('source').value=cleanedSource;
+          updateStats();
+        }catch(cleanError){
+          const cleanMessage=String(cleanError?.message||cleanError);
+          if(/PROHIBITED_CONTENT|prompt.?block|safety.?block|CONTENT_BLOCKED/i.test(cleanMessage)){
+            skipped++;skippedReasons.push('#'+e.number+': PROHIBITED_CONTENT during English cleanup; no retry.');
+            $('batchStatus').textContent=label+' • skipped — English cleanup blocked';
+            setStatus(label+' skipped because English cleanup was blocked. Continuing to next chapter...',false);
+            continue;
+          }
+          throw cleanError;
+        }
+        $('batchStatus').textContent=`${label} • Phase 1 Translate (single full-chapter chunk)...`;
         let p1;
         try{p1=await translateUntilNonEmpty(label,e)}catch(translateError){
           const translateMessage=String(translateError?.message||translateError);
