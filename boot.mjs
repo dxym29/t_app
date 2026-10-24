@@ -228,10 +228,6 @@ const translateReplacement=`app.post('/api/translate',async(req,res)=>{try{
             stageIndex++;sameStageErrorAttempts=0;
             continue;
           }
-          // Empty output is a non-quota failure: retry until text is returned.
-          console.warn('TRANSLATE: '+stage.name+' / '+stage.model+' returned empty output; retrying in 3s.');
-          await sleep(3000);
-          continue;
           sameStageErrorAttempts++;
           console.warn('TRANSLATE: '+stage.name+' / '+stage.model+' non-quota error (attempt '+sameStageErrorAttempts+'); retrying in 3s until success: '+String(e?.message||e));
           await sleep(3000);
