@@ -151,7 +151,7 @@ const translateReplacement=`app.post('/api/translate',async(req,res)=>{try{
   const allGlossary=await getGlossary(novelId);
   const glossary=filterGlossaryToSource(allGlossary,source);
   const locks=buildNameLocks(glossary);
-  const chunks=splitText(source,7000);
+  const chunks=[source];
   const stages=[
     {name:'primary',ai:aiTranslate,model:'gemini-3.1-flash-lite'},
     {name:'primary',ai:aiTranslate,model:'gemini-3.5-flash-lite'},
@@ -166,7 +166,7 @@ const translateReplacement=`app.post('/api/translate',async(req,res)=>{try{
   let stageIndex=0,modelUsed='gemini-3.1-flash-lite',providerUsed='primary',nameLockFallback=false;
   const runChunks=async(useLocks)=>{
     let result='';
-    const workChunks=splitText(source,7000);
+    const workChunks=[source];
     for(let i=0;i<workChunks.length;i++){
       const chunk=workChunks[i],previousSource=i>0?workChunks[i-1].slice(-CONTEXT_OVERLAP):'';
       const chunkLockResult=useLocks?lockChunkWithUniqueTokens(chunk,locks):{text:chunk,locks:[]};
