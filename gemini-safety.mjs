@@ -134,13 +134,15 @@ globalThis.fetch = async (input, init = {}) => {
   const body = await readBody(input, init);
   if (typeof body !== 'string') return originalFetch(input, init);
 
+  let json;
   try {
-    const json = JSON.parse(body);
-    return await translateWithProhibitedSplit(url, init, json);
+    json = JSON.parse(body);
   } catch (error) {
-    console.error('Gemini request wrapper error:', error?.message || error);
+    console.error('Gemini request wrapper could not parse request JSON:', error?.message || error);
     return originalFetch(input, init);
   }
+  // Do not resend a request if the network/API call itself throws.
+  return translateWithProhibitedSplit(url, init, json);
 };
 
 console.log('Gemini request compatibility wrapper enabled.');
