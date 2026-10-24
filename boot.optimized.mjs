@@ -18,11 +18,10 @@ const serverChunkPatch = `const CHUNK_SIZES={'gemini-3.1-flash-lite':12000,'gemi
 const serverPatchInjection = `source=source.replace(${JSON.stringify(oldServerChunkPatch)},${JSON.stringify(serverChunkPatch)});`;
 const bootReadLine = `let source=await fs.readFile(sourcePath,'utf8');`;
 if(!source.includes(bootReadLine))throw new Error('Could not locate boot.mjs source loader.');
-source = source.replace(bootReadLine, bootReadLine+'\n'+serverPatchInjection);
 
-// Raw web-novel cleanup: use the existing glossary Gemini API/client and the
-// same two models. The FULL fetched raw chapter is sent in ONE cleaning call;
-// no cleaning chunk size is applied. Translation chunking remains unchanged.
+// Raw web-novel cleanup is now a SEPARATE batch stage. The normal fetch route
+// remains a pure fetch and returns the raw source. Batch calls /api/clean-chapter
+// only when it reaches a chapter, so fetching itself does not wait for AI cleaning.
 const rawCleanHelper = `
 function rawCleanPrompt(raw){return \`You are a professional web novel editor.
 Below is a raw text extracted from a web novel site. It contains unwanted site scripts, watermarks, navigation buttons, ads, and broken English MTL.
@@ -44,11 +43,9 @@ async function cleanFetchedRawText(raw){
 }
 `;
 const fetchMarker=`app.post('/api/fetch-chapter',async(req,res)=>{try{const {url}=req.body;if(!url?.trim())return res.status(400).json({error:'Chapter URL is required'});const result=await fetchNovelPingChapter(url.trim());res.json(result)}catch(e){fail(res,e)}});`;
-const cleanedFetchRoute=`app.post('/api/fetch-chapter',async(req,res)=>{try{const {url}=req.body;if(!url?.trim())return res.status(400).json({error:'Chapter URL is required'});const result=await fetchNovelPingChapter(url.trim());const rawSource=String(result.source||'');if(!rawSource.trim())return res.json({...result,source:'',sourceChars:0,rawSourceChars:0,cleaned:true});const cleanedSource=await cleanFetchedRawText(rawSource);res.json({...result,source:cleanedSource,sourceChars:countChars(cleanedSource),rawSourceChars:countChars(rawSource),cleaned:true})}catch(e){fail(res,e)}});`;
-// Important: `source` here is the boot.mjs source text. The actual fetch route
-// lives in server.mjs, which boot.mjs loads later. Inject the cleaning patch
-// into boot.mjs so it executes against server.mjs at runtime.
-const rawCleanServerInjection=`source=source.replace(${JSON.stringify(fetchMarker)},${JSON.stringify(rawCleanHelper+'\n'+cleanedFetchRoute)});`;
+const cleanMarker=`app.post('/api/clean-chapter',async(req,res)=>{try{const {source}=req.body;if(!source?.trim())return res.status(400).json({error:'Source text is required'});const cleanedSource=await cleanFetchedRawText(String(source));res.json({source:cleanedSource,sourceChars:countChars(cleanedSource),rawSourceChars:countChars(String(source)),cleaned:true})}catch(e){fail(res,e)}});`;
+const cleanedFetchRoute=fetchMarker;
+const rawCleanServerInjection=`source=source.replace(${JSON.stringify(fetchMarker)},${JSON.stringify(rawCleanHelper+'\n'+cleanedFetchRoute+'\n'+cleanMarker)});`;
 source = source.replace(bootReadLine, bootReadLine+'\n'+serverPatchInjection+'\n'+rawCleanServerInjection);
 
 // NameLock optimization: if validation fails for a chunk, do not spend two
