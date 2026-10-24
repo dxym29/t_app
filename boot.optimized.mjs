@@ -9,12 +9,12 @@ const patchedPath = path.join(root, '.boot.optimized.runtime.mjs');
 let source = await fs.readFile(originalPath, 'utf8');
 
 // Phase 1 optimization: make the runtime use 12,000-character chunks everywhere.
-source = source.replaceAll('splitText(source,7000)', 'splitText(source,12000)');
+source = source.replaceAll('splitText(source,7000)', 'splitText(source,10000)');
 
 // boot.mjs reads server.mjs into its own `source` variable. Inject the
 // 12,000-character constants into that generated runtime before it imports it.
 const oldServerChunkPatch = `const CHUNK_SIZES={'gemini-3.1-flash-lite':10000,'gemini-3.5-flash-lite':10000};\nconst TRANSLATE_CHUNK_SIZE=10000;`;
-const serverChunkPatch = `const CHUNK_SIZES={'gemini-3.1-flash-lite':12000,'gemini-3.5-flash-lite':12000};\nconst TRANSLATE_CHUNK_SIZE=12000;`;
+const serverChunkPatch = `const CHUNK_SIZES={'gemini-3.1-flash-lite':10000,'gemini-3.5-flash-lite':10000};\nconst TRANSLATE_CHUNK_SIZE=10000;`;
 const serverPatchInjection = `source=source.replace(${JSON.stringify(oldServerChunkPatch)},${JSON.stringify(serverChunkPatch)});`;
 const bootReadLine = `let source=await fs.readFile(sourcePath,'utf8');`;
 if(!source.includes(bootReadLine))throw new Error('Could not locate boot.mjs source loader.');
