@@ -12,23 +12,21 @@
   async function saveBatchEpisode(e,translation){const saved=await api(`/api/episodes/${currentNovel.id}/${e.id}`,{method:'PUT',body:JSON.stringify({number:Number(e.number),title:e.title||'',source:e.source||'',translation,status:'translated'})});updateEpisodeMeta(saved);currentEpisode=saved;return saved}
   async function runUntilSuccess(label,phase,fn){
     let attempt=0;
-    while(attempt<3){
+    while(true){
       attempt++;
       try{return await fn()}
       catch(error){
         const message=String(error?.message||error);
         if(/PROHIBITED_CONTENT|prompt.?block|safety.?block/i.test(message)){
-          const note=`${label} • ${phase} blocked by Gemini PROHIBITED_CONTENT; skipping this chapter without retry.`;
+          const note=label+' • '+phase+' blocked by Gemini PROHIBITED_CONTENT; skipping this chapter without retry.';
           $('batchStatus').textContent=note;setStatus(note,false);throw error;
         }
-        if(attempt>=3)throw error;
-        const quota=isQuotaError(error),delay=RETRY_DELAY;
-        $('batchStatus').textContent=`${label} • ${phase} error (attempt ${attempt}/3${quota?' • quota/rate limit':''}) • retrying in ${delay/1000}s...`;
-        setStatus(`${label} • ${phase} failed${quota?' (quota/rate limit)':''}. Retry ${attempt}/3...`,false);
-        await sleep(delay);
+        if(isQuotaError(error))throw error;
+        $('batchStatus').textContent=label+' • '+phase+' error (attempt '+attempt+') • retrying in 3s...';
+        setStatus(label+' • '+phase+' failed; retry '+attempt+'...',false);
+        await sleep(3000);
       }
     }
-    throw new Error(`${label} • ${phase} failed after 3 attempts.`);
   }
   async function translateUntilNonEmpty(label,e){
     const p1=await api('/api/translate',{method:'POST',body:JSON.stringify({novelId:currentNovel.id,episodeId:e.id,source:e.source})});
@@ -49,32 +47,50 @@
     for(let n=start;n<start+count;n++){const e=sorted.find(x=>Number(x.number)===n);if(!e){skippedMissing.push(n);continue}chapters.push(e)}
     if(!chapters.length){setStatus(`Batch has no existing chapters in #${start}–#${start+count-1}.`,false);notify('Batch stopped',`No existing chapters in #${start}–#${start+count-1}.`,'batch-stop');return}
     const missingText=skippedMissing.length?`\n\nMissing chapters will be skipped automatically: ${skippedMissing.join(', ')}.`:'';
-    if(!confirm(`Run ${chapters.length} available chapters: #${chapters[0].number}–#${chapters[chapters.length-1].number}?${missingText}\n\n1. Pass 1 Translate\n2. Pass 2 Polish\n3. Save final result\n\nEnglish cleanup uses one Glossary API request per chapter. Translation sends the whole cleaned chapter as one chunk. PROHIBITED_CONTENT skips the chapter without retry. Translation stops after a maximum of two attempts on the same model for other non-quota errors. Phase 2 errors are skipped and Pass 1 is saved. Empty source is skipped automatically.`))return;
+    if(!confirm(`Run ${chapters.length} available chapters: #${chapters[0].number}–#${chapters[chapters.length-1].number}?${missingText}\n\n1. Pass 1 Translate\n2. Pass 2 Polish\n3. Save final result\n\nEnglish cleanup uses one Glossary API request per chapter. Translation uses 10,000-character chunks when needed. Quota and PROHIBITED_CONTENT skip the chapter. Other translation errors retry the same model every 3 seconds until success, using the configured fallback sequence. Phase 2 errors are skipped and Pass 1 is saved. Empty source is skipped automatically.`))return;
     const btn=$('batchBtn');btn.disabled=true;await requestNotifications();$('batchStatus').textContent=`Starting batch • ${chapters.length} chapters${skippedMissing.length?` • ${skippedMissing.length} missing skipped`:''}`;
     let completed=0,skipped=skippedMissing.length,emptySkipped=0,polishSkipped=0;const skippedReasons=skippedMissing.map(n=>`#${n}: chapter not found`);const polishErrors=[];
     try{
       for(let i=0;i<chapters.length;i++){
-        const meta=chapters[i];const label=`Chapter ${meta.number} (${i+1}/${chapters.length})`;$('batchStatus').textContent=`${label} • Loading...`;setStatus(`${label} • Loading source...`,true);
+        const meta=chapters[i];const label=`Chapter ${meta.number} (${i+1}/${chapters.length})`;
+        try{
+        $('batchStatus').textContent=`${label} • Loading...`;setStatus(`${label} • Loading source...`,true);
         const e=await runUntilSuccess(label,'Loading',()=>getFullEpisode(meta.id));setEpisodeUI(e);
         if(!String(e.source||'').trim()){skipped++;emptySkipped++;skippedReasons.push(`#${e.number}: source is empty`);$('batchStatus').textContent=`${label} • skipped — source data is empty`;setStatus(`${label} skipped — source data is empty. Continuing batch...`,false);continue}
         $('batchStatus').textContent=`${label} • English cleanup / filter (Glossary API)...`;
-        try{
-          const cleaned=await api('/api/clean-chapter',{method:'POST',body:JSON.stringify({source:e.source})});
-          const cleanedSource=String(cleaned?.source||'').trim();
-          if(!cleanedSource)throw new Error('Glossary API English cleanup returned empty text.');
-          e.source=cleanedSource;
-          $('source').value=cleanedSource;
-          updateStats();
-        }catch(cleanError){
-          const cleanMessage=String(cleanError?.message||cleanError);
-          if(/PROHIBITED_CONTENT|prompt.?block|safety.?block|CONTENT_BLOCKED/i.test(cleanMessage)){
-            skipped++;skippedReasons.push('#'+e.number+': PROHIBITED_CONTENT during English cleanup; no retry.');
-            $('batchStatus').textContent=label+' • skipped — English cleanup blocked';
-            setStatus(label+' skipped because English cleanup was blocked. Continuing to next chapter...',false);
-            continue;
+        const rawSource=String(e.source||'');
+        let cleanedSource='',cleanAttempt=0;
+        while(!cleanedSource){
+          cleanAttempt++;
+          try{
+            const cleaned=await api('/api/clean-chapter',{method:'POST',body:JSON.stringify({source:rawSource})});
+            cleanedSource=String(cleaned?.source||'').trim();
+            if(!cleanedSource)throw new Error('Glossary API English cleanup returned empty text.');
+          }catch(cleanError){
+            const cleanMessage=String(cleanError?.message||cleanError);
+            if(/PROHIBITED_CONTENT|prompt.?block|safety.?block|CONTENT_BLOCKED/i.test(cleanMessage)){
+              skipped++;skippedReasons.push('#'+e.number+': PROHIBITED_CONTENT during English cleanup; no retry.');
+              $('source').value=rawSource;updateStats();
+              $('batchStatus').textContent=label+' • skipped — English cleanup blocked';
+              setStatus(label+' skipped because English cleanup was blocked. Continuing to next chapter...',false);
+              break;
+            }
+            if(isQuotaError(cleanError)){
+              skipped++;skippedReasons.push('#'+e.number+': quota exceeded during English cleanup; raw source retained.');
+              $('source').value=rawSource;updateStats();
+              $('batchStatus').textContent=label+' • skipped — cleanup quota exceeded';
+              setStatus(label+' skipped — cleanup quota exceeded; raw source retained. Continuing batch...',false);
+              break;
+            }
+            $('batchStatus').textContent=label+' • English cleanup error (attempt '+cleanAttempt+') • retrying in 3s...';
+            setStatus(label+' • English cleanup failed; retry '+cleanAttempt+'...',false);
+            await sleep(3000);
           }
-          throw cleanError;
         }
+        if(!cleanedSource)continue;
+        e.source=cleanedSource;
+        $('source').value=cleanedSource;
+        updateStats();
         $('batchStatus').textContent=`${label} • Phase 1 Translate (single full-chapter chunk)...`;
         let p1;
         try{p1=await translateUntilNonEmpty(label,e)}catch(translateError){
@@ -92,6 +108,13 @@
         let finalText=p1.translation;
         try{$('batchStatus').textContent=`${label} • Phase 2 Polish...`;const p2=await api('/api/polish',{method:'POST',body:JSON.stringify({novelId:currentNovel.id,episodeId:e.id,translation:p1.translation})});if(!String(p2.translation||'').trim())throw new Error('Polish returned empty output.');finalText=p2.translation;$('polishedTranslation').value=finalText;updateStats()}catch(polishError){polishSkipped++;polishErrors.push(`#${e.number}: ${polishError.message||'Polish failed'}`);finalText=p1.translation;$('polishedTranslation').value='';updateStats();$('batchStatus').textContent=`${label} • Phase 2 error → skipping Polish, saving Pass 1...`}
         $('batchStatus').textContent=`${label} • Saving...`;const saved=await runUntilSuccess(label,'Save',()=>saveBatchEpisode(e,finalText));setEpisodeUI({...saved,source:e.source||saved.source||'',translation:finalText});completed++;$('batchStatus').textContent=`${label} • Saved • ${completed}/${chapters.length}`;setStatus(`Batch progress: ${completed}/${chapters.length} saved${skipped?` • ${skipped} skipped`:''}`,true);await sleep(500);
+        }catch(chapterError){
+          const message=String(chapterError?.message||chapterError);
+          skipped++;skippedReasons.push('#'+meta.number+': '+message);
+          $('batchStatus').textContent=label+' • error/blocked • continuing to next chapter...';
+          setStatus(label+' failed: '+message+'; continuing batch...',false);
+          continue;
+        }
       }
       const summary=`Batch complete • ${completed}/${chapters.length} saved${skipped?` • ${skipped} skipped`:''}${polishSkipped?` • ${polishSkipped} Pass 2 skipped`:''}`;$('batchStatus').textContent=summary;const detail=[...skippedReasons.slice(0,10),...polishErrors.slice(0,5)];setStatus(detail.length?`${summary}\n${detail.join(' | ')}`:summary,true);saveNotice(summary);notify('Batch completed ✓',`${summary}.`,'batch-complete');
     }catch(e){$('batchStatus').textContent=`Batch stopped • ${completed}/${chapters.length} saved • ${skipped} skipped`;setStatus(e.message||'Batch stopped.',false)}finally{btn.disabled=false}
