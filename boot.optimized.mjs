@@ -36,7 +36,7 @@ Return ONLY the cleaned and polished English story text.
 RAW TEXT:
 \${raw}\`}
 async function cleanFetchedRawText(raw){
-  const r=await runTwoModelTask(aiGlossary,rawCleanPrompt(String(raw||'')),'RAW_CLEAN');
+  const r=await generateModel(aiGlossary,rawCleanPrompt(String(raw||'')),MODELS[0]);
   const text=String(r.text||'').trim();
   if(!text)throw new Error('Raw cleaning AI returned empty output.');
   return text;
