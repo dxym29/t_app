@@ -120,52 +120,10 @@ async function readJsonResponse(response) {
   }
 }
 
-async function translateWithProhibitedSplit(url, init, json, depth = 0) {
-  const firstResponse = await fetchGemini(url, init, json);
-  const firstJson = await readJsonResponse(firstResponse);
-
-  if (!firstJson || !responseIsProhibited(firstJson) || !isTranslationPrompt(json)) {
-    return firstResponse;
-  }
-
-  if (depth >= PROHIBITED_MAX_SPLIT_DEPTH) {
-    console.log(`Gemini PROHIBITED_CONTENT: minimum split depth reached (${depth}).`);
-    return firstResponse;
-  }
-
-  const sourceInfo = getSourceText(json);
-  if (!sourceInfo) return firstResponse;
-
-  const pieces = splitSource(sourceInfo.source);
-  if (!pieces) return firstResponse;
-
-  console.log(`Gemini PROHIBITED_CONTENT: reducing Phase 1 chunk ${sourceInfo.source.length} -> ${pieces[0].length}+${pieces[1].length} chars.`);
-
-  const outputs = [];
-  let templateJson = null;
-  for (const piece of pieces) {
-    const childJson = JSON.parse(JSON.stringify(json));
-    childJson.contents[0].parts[0].text = sourceInfo.prefix + piece;
-    const childResponse = await translateWithProhibitedSplit(url, init, childJson, depth + 1);
-    const childJsonBody = await readJsonResponse(childResponse);
-
-    if (!childJsonBody || responseIsProhibited(childJsonBody)) {
-      return firstResponse;
-    }
-
-    const childText = extractText(childJsonBody);
-    if (!childText.trim()) return firstResponse;
-    outputs.push(childText);
-    if (!templateJson) templateJson = childJsonBody;
-  }
-
-  const combinedText = outputs.join('\n\n').trim();
-  if (!combinedText) return firstResponse;
-
-  return new Response(JSON.stringify(makeCombinedResponse(templateJson, combinedText)), {
-    status: 200,
-    headers: { 'content-type': 'application/json' }
-  });
+async function translateWithProhibitedSplit(url, init, json) {
+  // Exactly one request per model/API stage. A PROHIBITED_CONTENT response is
+  // passed through unchanged so the translation route can skip the chapter.
+  return fetchGemini(url, init, json);
 }
 
 globalThis.fetch = async (input, init = {}) => {
