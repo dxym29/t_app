@@ -44,8 +44,12 @@ async function cleanFetchedRawText(raw){
 }
 `;
 const fetchMarker=`app.post('/api/fetch-chapter',async(req,res)=>{try{const {url}=req.body;if(!url?.trim())return res.status(400).json({error:'Chapter URL is required'});const result=await fetchNovelPingChapter(url.trim());res.json(result)}catch(e){fail(res,e)}});`;
-if(!source.includes(fetchMarker))throw new Error('Could not locate /api/fetch-chapter endpoint. No runtime changes were made.');
-source = source.replace(fetchMarker,rawCleanHelper+`\napp.post('/api/fetch-chapter',async(req,res)=>{try{const {url}=req.body;if(!url?.trim())return res.status(400).json({error:'Chapter URL is required'});const result=await fetchNovelPingChapter(url.trim());const rawSource=String(result.source||'');if(!rawSource.trim())return res.json({...result,source:'',sourceChars:0,rawSourceChars:0,cleaned:true});const cleanedSource=await cleanFetchedRawText(rawSource);res.json({...result,source:cleanedSource,sourceChars:countChars(cleanedSource),rawSourceChars:countChars(rawSource),cleaned:true})}catch(e){fail(res,e)}});`);
+const cleanedFetchRoute=`app.post('/api/fetch-chapter',async(req,res)=>{try{const {url}=req.body;if(!url?.trim())return res.status(400).json({error:'Chapter URL is required'});const result=await fetchNovelPingChapter(url.trim());const rawSource=String(result.source||'');if(!rawSource.trim())return res.json({...result,source:'',sourceChars:0,rawSourceChars:0,cleaned:true});const cleanedSource=await cleanFetchedRawText(rawSource);res.json({...result,source:cleanedSource,sourceChars:countChars(cleanedSource),rawSourceChars:countChars(rawSource),cleaned:true})}catch(e){fail(res,e)}});`;
+// Important: `source` here is the boot.mjs source text. The actual fetch route
+// lives in server.mjs, which boot.mjs loads later. Inject the cleaning patch
+// into boot.mjs so it executes against server.mjs at runtime.
+const rawCleanServerInjection=`source=source.replace(${JSON.stringify(fetchMarker)},${JSON.stringify(rawCleanHelper+'\n'+cleanedFetchRoute)});`;
+source = source.replace(bootReadLine, bootReadLine+'\n'+serverPatchInjection+'\n'+rawCleanServerInjection);
 
 // NameLock optimization: if validation fails for a chunk, do not spend two
 // more NameLock attempts and do not restart the whole chapter. Re-run only
