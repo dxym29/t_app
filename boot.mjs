@@ -151,7 +151,7 @@ const translateReplacement=`app.post('/api/translate',async(req,res)=>{try{
   const allGlossary=await getGlossary(novelId);
   const glossary=filterGlossaryToSource(allGlossary,source);
   const locks=buildNameLocks(glossary);
-  const chunks=[source];
+  const chunks=splitText(source,10000);
   const stages=[
     {name:'primary',ai:aiTranslate,model:'gemini-3.1-flash-lite'},
     {name:'primary',ai:aiTranslate,model:'gemini-3.5-flash-lite'},
@@ -166,7 +166,7 @@ const translateReplacement=`app.post('/api/translate',async(req,res)=>{try{
   let stageIndex=0,modelUsed='gemini-3.1-flash-lite',providerUsed='primary',nameLockFallback=false;
   const runChunks=async(useLocks)=>{
     let result='';
-    const workChunks=[source];
+    const workChunks=splitText(source,10000);
     for(let i=0;i<workChunks.length;i++){
       const chunk=workChunks[i],previousSource=i>0?workChunks[i-1].slice(-CONTEXT_OVERLAP):'';
       const chunkLockResult=useLocks?lockChunkWithUniqueTokens(chunk,locks):{text:chunk,locks:[]};
@@ -228,25 +228,12 @@ const translateReplacement=`app.post('/api/translate',async(req,res)=>{try{
             stageIndex++;sameStageErrorAttempts=0;
             continue;
           }
-          if(/empty model output|returned empty output/i.test(String(e?.message||e))){
-            if(lastEmptyOutputStage!==stageIndex){lastEmptyOutputStage=stageIndex;emptyOutputAttempts=0;}
-            emptyOutputAttempts++;
-            if(emptyOutputAttempts<2){
-              console.warn('TRANSLATE: '+stage.name+' / '+stage.model+' returned empty output; retry '+emptyOutputAttempts+'/1 in 3s.');
-              await sleep(3000);
-              continue;
-            }
-            console.warn('TRANSLATE: '+stage.name+' / '+stage.model+' returned empty output twice; moving to next configured model/API stage.');
-            stageIndex++;sameStageErrorAttempts=0;
-            emptyOutputAttempts=0;
-            continue;
-          }
+          // Empty output is a non-quota failure: retry until text is returned.
+          console.warn('TRANSLATE: '+stage.name+' / '+stage.model+' returned empty output; retrying in 3s.');
+          await sleep(3000);
+          continue;
           sameStageErrorAttempts++;
-          if(sameStageErrorAttempts>=2){
-            console.error('TRANSLATE: '+stage.name+' / '+stage.model+' failed twice for this full-chapter request; stopping instead of spending more API calls: '+String(e?.message||e));
-            throw e;
-          }
-          console.warn('TRANSLATE: '+stage.name+' / '+stage.model+' failed; one retry only for this full-chapter request.');
+          console.warn('TRANSLATE: '+stage.name+' / '+stage.model+' non-quota error (attempt '+sameStageErrorAttempts+'); retrying in 3s until success: '+String(e?.message||e));
           await sleep(3000);
         }
       }
