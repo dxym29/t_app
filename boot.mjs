@@ -176,7 +176,7 @@ const translateReplacement=`app.post('/api/translate',async(req,res)=>{try{
       const expected=new Map(chunkLocks.map(x=>[x.token,1]));
       // Only expose glossary entries whose source names occur in this chunk.
       const chunkGlossary=useLocks?filterGlossaryToSource(glossary,chunk):glossary;
-      let done=false,lastError, nameLockAttempts=0,emptyOutputAttempts=0,lastEmptyOutputStage=-1;
+      let done=false,lastError, nameLockAttempts=0,emptyOutputAttempts=0,lastEmptyOutputStage=-1,sameStageErrorAttempts=0;
       while(!done){
         if(stageIndex>=stages.length){const exhausted=new Error('SKIP_CHAPTER: all configured translation APIs/models are out of quota.');exhausted.code='QUOTA_EXHAUSTED';throw exhausted;}
         const stage=stages[stageIndex];
@@ -225,7 +225,7 @@ const translateReplacement=`app.post('/api/translate',async(req,res)=>{try{
           if(isLock(e)&&useLocks)throw e;
           if(isQuota(e)){
             console.warn('TRANSLATE: '+stage.name+' / '+stage.model+' quota exceeded; moving to next configured model/API stage.');
-            stageIndex++;
+            stageIndex++;sameStageErrorAttempts=0;
             continue;
           }
           if(/empty model output|returned empty output/i.test(String(e?.message||e))){
@@ -237,11 +237,16 @@ const translateReplacement=`app.post('/api/translate',async(req,res)=>{try{
               continue;
             }
             console.warn('TRANSLATE: '+stage.name+' / '+stage.model+' returned empty output twice; moving to next configured model/API stage.');
-            stageIndex++;
+            stageIndex++;sameStageErrorAttempts=0;
             emptyOutputAttempts=0;
             continue;
           }
-          console.error('TRANSLATE: '+stage.name+' / '+stage.model+' chunk '+(i+1)+'/'+workChunks.length+' failed: '+String(e?.message||e)+'. Retrying same model in 3s because error is not quota-related.');
+          sameStageErrorAttempts++;
+          if(sameStageErrorAttempts>=2){
+            console.error('TRANSLATE: '+stage.name+' / '+stage.model+' failed twice for this full-chapter request; stopping instead of spending more API calls: '+String(e?.message||e));
+            throw e;
+          }
+          console.warn('TRANSLATE: '+stage.name+' / '+stage.model+' failed; one retry only for this full-chapter request.');
           await sleep(3000);
         }
       }
