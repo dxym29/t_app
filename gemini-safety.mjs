@@ -144,5 +144,5 @@ globalThis.fetch = async (input, init = {}) => {
 };
 
 console.log('Gemini request compatibility wrapper enabled.');
-console.log('Phase 1 PROHIBITED_CONTENT chunks will be reduced only after a prohibited response.');
+console.log('Phase 1 sends one full chapter per translation request; PROHIBITED_CONTENT is returned without splitting or retrying.');
 console.log(`Gemini API usage counter initialized for ${usageDayKey()} (Asia/Bangkok).`);
