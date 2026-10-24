@@ -47,7 +47,7 @@
     for(let n=start;n<start+count;n++){const e=sorted.find(x=>Number(x.number)===n);if(!e){skippedMissing.push(n);continue}chapters.push(e)}
     if(!chapters.length){setStatus(`Batch has no existing chapters in #${start}–#${start+count-1}.`,false);notify('Batch stopped',`No existing chapters in #${start}–#${start+count-1}.`,'batch-stop');return}
     const missingText=skippedMissing.length?`\n\nMissing chapters will be skipped automatically: ${skippedMissing.join(', ')}.`:'';
-    if(!confirm(`Run ${chapters.length} available chapters: #${chapters[0].number}–#${chapters[chapters.length-1].number}?${missingText}\n\n1. Pass 1 Translate\n2. Pass 2 Polish\n3. Save final result\n\nEnglish cleanup uses one Glossary API request per chapter. Translation uses 10,000-character chunks when needed. Quota and PROHIBITED_CONTENT skip the chapter. Other translation errors retry the same model every 3 seconds until success, using the configured fallback sequence. Phase 2 errors are skipped and Pass 1 is saved. Empty source is skipped automatically.`))return;
+    if(!confirm(`Run ${chapters.length} available chapters: #${chapters[0].number}–#${chapters[chapters.length-1].number}?${missingText}\n\n1. English-to-English cleanup / replace Original only after success\n2. Myanmar translation (10,000-character chunks if needed)\n3. Myanmar-to-Myanmar polish / save Pass 1 if polish fails\n\nEnglish cleanup uses one Glossary API request per chapter. Translation uses 10,000-character chunks when needed. Quota and PROHIBITED_CONTENT skip the chapter. Other translation errors retry the same model every 3 seconds until success, using the configured fallback sequence. Phase 2 errors are skipped and Pass 1 is saved. Empty source is skipped automatically.`))return;
     const btn=$('batchBtn');btn.disabled=true;await requestNotifications();$('batchStatus').textContent=`Starting batch • ${chapters.length} chapters${skippedMissing.length?` • ${skippedMissing.length} missing skipped`:''}`;
     let completed=0,skipped=skippedMissing.length,emptySkipped=0,polishSkipped=0;const skippedReasons=skippedMissing.map(n=>`#${n}: chapter not found`);const polishErrors=[];
     try{
@@ -91,7 +91,7 @@
         e.source=cleanedSource;
         $('source').value=cleanedSource;
         updateStats();
-        $('batchStatus').textContent=`${label} • Phase 1 Translate (single full-chapter chunk)...`;
+        $('batchStatus').textContent=`${label} • Phase 1 Translate (10,000-character chunks when needed)...`;
         let p1;
         try{p1=await translateUntilNonEmpty(label,e)}catch(translateError){
           const translateMessage=String(translateError?.message||translateError);
