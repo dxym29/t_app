@@ -23,19 +23,17 @@
         }
         if(attempt>=3)throw error;
         const quota=isQuotaError(error),delay=RETRY_DELAY;
-        $('batchStatus').textContent=`${label} • ${phase} error (attempt ${attempt}/3${quota}?' • quota/rate limit':''}) • retrying in ${delay/1000}s...`;
-        setStatus(`${label} • ${phase} failed${quota}?' (quota/rate limit)':''}. Retry ${attempt}/3...`,false);
+        $('batchStatus').textContent=`${label} • ${phase} error (attempt ${attempt}/3${quota?' • quota/rate limit':''}) • retrying in ${delay/1000}s...`;
+        setStatus(`${label} • ${phase} failed${quota?' (quota/rate limit)':''}. Retry ${attempt}/3...`,false);
         await sleep(delay);
       }
     }
     throw new Error(`${label} • ${phase} failed after 3 attempts.`);
   }
   async function translateUntilNonEmpty(label,e){
-    return await runUntilSuccess(label,'Phase 1 Translate',async()=>{
-      const p1=await api('/api/translate',{method:'POST',body:JSON.stringify({novelId:currentNovel.id,episodeId:e.id,source:e.source})});
-      if(!String(p1?.translation||'').trim())throw new Error('Phase 1 returned an empty translation. Retrying this same chapter after 5 seconds.');
-      return p1;
-    });
+    const p1=await api('/api/translate',{method:'POST',body:JSON.stringify({novelId:currentNovel.id,episodeId:e.id,source:e.source})});
+    if(!String(p1?.translation||'').trim())throw new Error('Phase 1 returned empty output; stopping this chapter rather than repeating the full-chapter request.');
+    return p1;
   }
   async function runBatch(){
     if(!currentNovel)return alert('Select a novel first.');
@@ -61,7 +59,7 @@
         if(!String(e.source||'').trim()){skipped++;emptySkipped++;skippedReasons.push(`#${e.number}: source is empty`);$('batchStatus').textContent=`${label} • skipped — source data is empty`;setStatus(`${label} skipped — source data is empty. Continuing batch...`,false);continue}
         $('batchStatus').textContent=`${label} • English cleanup / filter (Glossary API)...`;
         try{
-          const cleaned=await runUntilSuccess(label,'English cleanup / filter',()=>api('/api/clean-chapter',{method:'POST',body:JSON.stringify({source:e.source})}));
+          const cleaned=await api('/api/clean-chapter',{method:'POST',body:JSON.stringify({source:e.source})});
           const cleanedSource=String(cleaned?.source||'').trim();
           if(!cleanedSource)throw new Error('Glossary API English cleanup returned empty text.');
           e.source=cleanedSource;
