@@ -25,7 +25,7 @@
 
   <section class="card">
     <h2>Batch Translate / Polish / Save</h2>
-    <p class="muted">Each chapter is cleaned in English first using the Glossary API, then translated as one full-chapter chunk. PROHIBITED_CONTENT chapters are skipped without retry. Other errors retry at most 3 times; Phase 2 errors save Pass 1 and continue.</p>
+    <p class="muted">Each chapter is cleaned in English first using the Glossary API and replaces Original only after success. Translation uses 10,000-character chunks when needed. Quota and PROHIBITED_CONTENT skip the chapter; other errors retry every 3 seconds. NameLock validation falls back to normal translation. If Myanmar polishing fails, Pass 1 is saved and the batch continues.</p>
     <div class="row"><label>Start chapter <input id="batchStart" type="number" min="1" placeholder="204"></label><label>Chapters <input id="batchCount" type="number" min="1" max="500" value="10"></label><button id="batchBtn" class="primary">Run Batch</button></div>
     <div id="batchStatus" class="muted"></div>
   </section>
@@ -43,7 +43,7 @@
 </main>
 <script src="/app.js?v=20261014-2"></script>
 <script src="/series.js?v=20261014-1"></script>
-<script src="/batch.js?v=20261024-3"></script>
+<script src="/batch.js?v=20261024-4"></script>
 <script>
 (async()=>{
   const box=document.getElementById('apiUsageBox');
