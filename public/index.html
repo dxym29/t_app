@@ -41,9 +41,36 @@
   <section class="card"><h2>Website Export / Backup</h2><p class="muted">Export the selected novel as the exact MM Novel workbook format. Leave the chapter limit blank to export the whole novel, or enter a chapter number to export from the beginning through that chapter. JSON backup remains available for database moves.</p><div class="row"><label>Export through chapter <input id="exportToChapter" type="number" min="1" placeholder="e.g. 200"></label><button id="exportTemplateBtn" class="primary">Export Website Excel</button><button id="exportNovelBtn">Export JSON Backup</button><button id="exportAllBtn">Export All JSON</button><label class="fileBtn">Import Backup<input id="importFile" type="file" accept=".json" hidden></label></div></section>
   <section class="card"><h2>Episodes</h2><div id="episodes"></div></section>
 </main>
-<script src="/app.js?v=20261028-1"></script>
+<script src="/app.js?v=20261014-2"></script>
 <script src="/series.js?v=20261014-1"></script>
 <script src="/batch.js?v=20261024-4"></script>
+<script>
+// Chapter-limited website Excel export. This overrides only the export button
+// handler so the rest of the existing frontend workflow stays unchanged.
+(()=>{
+  const btn=document.getElementById('exportTemplateBtn');
+  if(!btn)return;
+  btn.onclick=async()=>{
+    const novelId=document.getElementById('novelSelect')?.value;
+    if(!novelId)return alert('Select a novel first.');
+    const limit=document.getElementById('exportToChapter')?.value.trim()||'';
+    if(limit && (!/^\d+$/.test(limit)||Number(limit)<1))return alert('Enter a valid chapter number.');
+    try{
+      const query=limit?`?toChapter=${encodeURIComponent(limit)}&_=${Date.now()}`:`?_=${Date.now()}`;
+      const r=await fetch(`/api/export/template/${encodeURIComponent(novelId)}${query}`,{cache:'no-store'});
+      if(!r.ok){const j=await r.json().catch(()=>({}));throw new Error(j.error||'Excel export failed')}
+      const blob=await r.blob();
+      const cd=r.headers.get('Content-Disposition')||'';
+      const m=cd.match(/filename="?([^";]+)"?/i);
+      const filename=m?m[1]:`novel-${novelId}-mm-novel.xlsx`;
+      const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=filename;document.body.appendChild(a);a.click();a.remove();
+      setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+      const n=document.getElementById('saveNotice');
+      if(n){n.textContent='✓ '+(limit?`Website Excel exported through Chapter ${limit}`:'Website Excel exported successfully');n.style.opacity='1';clearTimeout(n._timer);n._timer=setTimeout(()=>n.style.opacity='0',2200)}
+    }catch(e){alert(e.message)}
+  };
+})();
+</script>
 <script>
 (async()=>{
   const box=document.getElementById('apiUsageBox');
