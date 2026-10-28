@@ -54,27 +54,8 @@ const fetchMarker=`app.post('/api/fetch-chapter',async(req,res)=>{try{const {url
 const cleanMarker=`app.post('/api/clean-chapter',async(req,res)=>{try{const {source}=req.body;if(!source?.trim())return res.status(400).json({error:'Source text is required'});const cleanedSource=await cleanFetchedRawText(String(source));res.json({source:cleanedSource,sourceChars:countChars(cleanedSource),rawSourceChars:countChars(String(source)),cleaned:true})}catch(e){fail(res,e)}});`;
 source = source.replace(bootReadLine, bootReadLine+'\n'+serverPatchInjection+'\n'+`source=source.replace(${JSON.stringify(fetchMarker)},${JSON.stringify(rawCleanHelper+'\n'+fetchMarker+'\n'+cleanMarker)});`);
 
-// NameLock recovery: retry ONLY the failed chunk without placeholder tokens.
-// The recovery still receives the authoritative glossary, and the master
-// prompt explicitly tells the model to preserve every glossary name mapping.
-const masterSignature=`function masterPrompt({style,glossary,locks,source,previousTail,sourceContext})`;
-const masterSignaturePatched=`function masterPrompt({style,glossary,locks,source,previousTail,sourceContext,nameLockFallback=false})`;
-if(!source.includes(masterSignature))throw new Error('Could not locate masterPrompt signature.');
-source=source.replace(masterSignature,masterSignaturePatched);
-const nameLockDisabledLine='- NAME LOCK is DISABLED for this chapter. Translate names naturally and consistently using the glossary. Do not output any placeholder token such as [[NAMELOCK_001]].';
-const nameLockDisabledPatched=`- NAME LOCK is DISABLED for this chapter. Translate names naturally and consistently using the glossary. Do not output any placeholder token such as [[NAMELOCK_001]].\n${'${nameLockFallback ? \'- IMPORTANT NAME-CONSISTENCY RECOVERY: NameLock validation failed for this chunk. Carefully read the AUTHORITATIVE GLOSSARY before translating. Preserve every glossary original → Myanmar translation mapping exactly. Do NOT rename, re-spell, replace, transliterate differently, or invent alternative names. If a person/place/item/organization appears in the glossary, use its established Myanmar translation consistently throughout this chunk.\' : \'\n\''}`;
-if(!source.includes(nameLockDisabledLine))throw new Error('Could not locate masterPrompt NameLock instruction.');
-source=source.replace(nameLockDisabledLine,nameLockDisabledPatched);
-
-const oldLockBlock = `if(!valid){\n              const mismatches=chunkLocks.map(x=>({token:x.token,expected:1,actual:countToken(output,x.token),sourceTerm:x.original})).filter(x=>x.actual!==1);\n              nameLockAttempts++;\n              console.warn('TRANSLATE: NameLock token mismatch for chunk '+(i+1)+'/'+workChunks.length+': '+JSON.stringify(mismatches));\n              if(nameLockAttempts<3){\n                console.warn('TRANSLATE: NameLock validation failed for chunk '+(i+1)+'/'+workChunks.length+'; real retry '+nameLockAttempts+'/3 in 3s.');\n                await sleep(3000);\n                continue;\n              }\n              throw new Error('NameLock validation failed after 3 actual translation attempts.');\n            }\n            output=restoreNameLocks(output,chunkLocks);`;
-const newLockBlock = `if(!valid){\n              const mismatches=chunkLocks.map(x=>({token:x.token,expected:1,actual:countToken(output,x.token),sourceTerm:x.original})).filter(x=>x.actual!==1);\n              console.warn('TRANSLATE: NameLock validation failed for chunk '+(i+1)+'/'+workChunks.length+': '+JSON.stringify(mismatches)+'; re-running ONLY this chunk without NameLock.');\n              const natural=await generateModel(stage.ai,masterPrompt({\n                style:novel.style,glossary:chunkGlossary,locks:[],source:chunk,\n                previousTail:result.slice(-5000),sourceContext:previousSource,nameLockFallback:true\n              }),stage.model);\n              output=String(natural.text||'').trim();\n              if(!output)throw new Error('Translation model returned empty output during no-NameLock fallback.');\n              if(/\\[\\[NAMELOCK_[^\\]]+\\]\\]/i.test(output))throw new Error('Translation output unexpectedly contains a NameLock placeholder during no-NameLock fallback.');\n              modelUsed=natural.model;\n              providerUsed=stage.name;\n              console.warn('TRANSLATE: chunk '+(i+1)+'/'+workChunks.length+' recovered with glossary-guided natural translation without NameLock.');\n            }else{\n              output=restoreNameLocks(output,chunkLocks);\n            }`;
-if(!source.includes(oldLockBlock))throw new Error('Could not locate the existing NameLock validation block in boot.mjs. No runtime changes were made.');
-source = source.replace(oldLockBlock, newLockBlock);
-
-const oldChapterFallback = `  let result='';\n  try{\n    result=await runChunks(true);\n  }catch(e){\n    if(!isLock(e))throw e;\n    nameLockFallback=true;\n    console.warn('TRANSLATE: NameLock validation failed after 3 checks. Discarding partial chapter and restarting whole chapter without NameLock.');\n    result=await runChunks(false);\n  }`;
-const newChapterFallback = `  let result='';\n  result=await runChunks(true);`;
-if(!source.includes(oldChapterFallback))throw new Error('Could not locate the existing whole-chapter NameLock fallback in boot.mjs. No runtime changes were made.');
-source = source.replace(oldChapterFallback, newChapterFallback);
+// NameLock validation/recovery is maintained in boot.mjs itself. Do not patch
+// stale signatures here: boot.mjs builds the runtime from the current server source.
 
 // Website Excel export: allow an optional ?toChapter=N limit. Default remains
 // the whole novel when the field is blank.
