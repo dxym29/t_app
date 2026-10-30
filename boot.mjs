@@ -59,53 +59,47 @@ source=source.replace(translateKey,fallbackKey+'\n'+translateKey);
 const lockStart=source.indexOf('function buildNameLocks(');
 const lockEnd=source.indexOf('function countChars(',lockStart);
 if(lockStart<0||lockEnd<0)throw new Error('NameLock helpers could not be patched safely.');
-const lockReplacement=`function normalizeNameKey(v){return String(v||'').normalize('NFKC').replace(/[“”"']/g,'').replace(/\s+/g,' ').trim().toLowerCase()}
-function buildNameLocks(g){
-  const raw=[];
-  for(const [type,arr] of Object.entries(g||{}))for(const x of arr||[]){
-    const original=String(x.original||'').trim(),translation=String(x.translation||'').trim();
-    if(!original||!translation)continue;
-    raw.push({type,original,translation,voice:x.voice||'',note:x.note||''});
-  }
-  const aliasOwners=new Map(),originalKeys=new Set(raw.map(x=>normalizeNameKey(x.original)));
-  for(const x of raw){
-    if(x.type!=='characters')continue;
-    const parts=x.original.split(/\s+/).filter(Boolean);
-    if(parts.length<3)continue;
-    const alias=parts.slice(-2).join(' '),key=normalizeNameKey(alias);
-    if(!key||key===normalizeNameKey(x.original))continue;
-    if(!aliasOwners.has(key))aliasOwners.set(key,[]);
-    aliasOwners.get(key).push(x.original);
-  }
-  let n=1;
-  return raw.map(x=>{
-    const parts=x.original.split(/\s+/).filter(Boolean);
-    const alias=x.type==='characters'&&parts.length>=3?parts.slice(-2).join(' '):'';
-    const aliasKey=normalizeNameKey(alias);
-    const safeAlias=alias&&!originalKeys.has(aliasKey)&&(aliasOwners.get(aliasKey)||[]).length===1?alias:'';
-    return {...x,aliases:safeAlias?[safeAlias]:[],token:'[[NAMELOCK_'+String(n++).padStart(3,'0')+']]'};
-  }).sort((a,b)=>b.original.length-a.original.length);
+const lockReplacement=`function normalizeNameKey(v){return String(v||'').normalize('NFKC').replace(/[“”"']/g,'').replace(/\\s+/g,' ').trim().toLowerCase()}
+function escapeNameRegex(v){return String(v||'').replace(/[.*+?^${}()|[\\]\\\\]/g,'\\\\$&')}
+function sourceTermAppears(text,term){
+  const value=String(term||'').trim();
+  if(!value)return false;
+  const re=new RegExp('(^|[^\\\\p{L}\\\\p{N}])'+escapeNameRegex(value)+'(?=$|[^\\\\p{L}\\\\p{N}])','iu');
+  return re.test(String(text||''));
 }
-function termAppears(text,term){const t=String(text||'').toLowerCase(),q=String(term||'').trim().toLowerCase();return !!q&&t.includes(q)}
-function filterGlossaryToSource(g,source){const text=String(source||'');const all=buildNameLocks(g);const active=new Set(all.filter(x=>termAppears(text,x.original)||(x.aliases||[]).some(a=>termAppears(text,a))).map(x=>normalizeNameKey(x.original)));const out={};for(const [type,arr] of Object.entries(g||{}))out[type]=(arr||[]).filter(x=>active.has(normalizeNameKey(String(x.original||'').trim())));return out}
-function lockText(text,locks){let out=String(text||'');const terms=[];for(const x of locks){terms.push({term:x.original,token:x.token});for(const a of x.aliases||[])terms.push({term:a,token:x.token})}terms.sort((a,b)=>b.term.length-a.term.length);for(const x of terms)out=out.split(x.term).join(x.token);return out}
+function buildNameLocks(g){
+  // Lock only character names. Other glossary categories remain glossary guidance.
+  const candidates=[];
+  for(const x of (g?.characters||[])){
+    const original=String(x.original||'').trim(),translation=String(x.translation||'').trim();
+    if(!original||!translation||Array.from(original).length<3)continue;
+    candidates.push({type:'characters',original,translation,voice:x.voice||'',note:x.note||''});
+  }
+  // Conflicting duplicate source names are ambiguous; leave them unlocked.
+  const grouped=new Map();
+  for(const x of candidates){const key=normalizeNameKey(x.original);if(!grouped.has(key))grouped.set(key,[]);grouped.get(key).push(x)}
+  const safe=[...grouped.values()].filter(group=>new Set(group.map(x=>x.translation)).size===1).map(group=>group[0]);
+  let n=1;
+  return safe.map(x=>({...x,aliases:[],token:'[[NAMELOCK_'+String(n++).padStart(3,'0')+']]' })).sort((a,b)=>b.original.length-a.original.length);
+}
+function filterGlossaryToSource(g,source){
+  const out={};
+  for(const [type,arr] of Object.entries(g||{}))out[type]=(arr||[]).filter(x=>sourceTermAppears(source,x.original));
+  return out;
+}
+function lockText(text,locks){
+  let out=String(text||'');
+  for(const x of [...locks].sort((a,b)=>b.original.length-a.original.length)){
+    const re=new RegExp('(^|[^\\\\p{L}\\\\p{N}])('+escapeNameRegex(x.original)+')(?=$|[^\\\\p{L}\\\\p{N}])','giu');
+    out=out.replace(re,(m,prefix)=>prefix+x.token);
+  }
+  return out;
+}
 function lockChunkWithUniqueTokens(text,locks){
-  let out=String(text||''),n=1;
-  const used=[];
-  const terms=[];
-  for(const x of locks){terms.push({term:x.original,lock:x});for(const a of x.aliases||[])terms.push({term:a,lock:x})}
-  terms.sort((a,b)=>b.term.length-a.term.length);
-  for(const item of terms){
-    if(!item.term)continue;
-    const parts=out.split(item.term);
-    if(parts.length<2)continue;
-    let next=parts[0];
-    for(let i=1;i<parts.length;i++){
-      const token='[[NAMELOCK_'+String(n++).padStart(3,'0')+']]';
-      used.push({...item.lock,token,matchedForm:item.term});
-      next+=token+parts[i];
-    }
-    out=next;
+  let out=String(text||''),n=1;const used=[];
+  for(const item of [...locks].sort((a,b)=>b.original.length-a.original.length)){
+    const re=new RegExp('(^|[^\\\\p{L}\\\\p{N}])('+escapeNameRegex(item.original)+')(?=$|[^\\\\p{L}\\\\p{N}])','giu');
+    out=out.replace(re,(match,prefix)=>{const token='[[NAMELOCK_'+String(n++).padStart(3,'0')+']]';used.push({...item,token,matchedForm:item.original});return prefix+token});
   }
   return {text:out,locks:used};
 }
@@ -113,22 +107,32 @@ function lockTranslationText(text,locks){let out=String(text||'');const ordered=
 function findNameLockTokens(text){const re=new RegExp('\\\\[\\\\[NAMELOCK_([^\\\\]]+)\\\\]\\\\]','g');return [...String(text||'').matchAll(re)].map(m=>({raw:m[0],label:m[1]}))}
 function repairMissingNameLocksFromLiteralNames(text,locks){
   let out=String(text||'');
-  for(const x of locks){
-    if(countToken(out,x.token)===1)continue;
-    const forms=[x.matchedForm,x.original,...(x.aliases||[])].filter(Boolean).sort((a,b)=>b.length-a.length);
-    for(const form of forms){
-      if(countToken(out,x.token)===1)break;
-      const formText=String(form);
-      const index=out.toLowerCase().indexOf(formText.toLowerCase());
-      if(index>=0)out=out.slice(0,index)+x.token+out.slice(index+formText.length);
-    }
+  for(const x of locks)while(countToken(out,x.token)<1){
+    const form=String(x.matchedForm||x.original||'');
+    const re=new RegExp('(^|[^\\\\p{L}\\\\p{N}])('+escapeNameRegex(form)+')(?=$|[^\\\\p{L}\\\\p{N}])','iu');
+    const match=re.exec(out);if(!match)break;
+    out=out.slice(0,match.index)+match[1]+x.token+out.slice(match.index+match[0].length);
   }
   return out;
 }
-function repairInventedNameLocks(text,locks){let out=String(text||'');const byLabel=new Map();for(const x of locks){byLabel.set(normalizeNameKey(x.original),x.token);for(const a of x.aliases||[])byLabel.set(normalizeNameKey(a),x.token)}for(const m of findNameLockTokens(out)){if(locks.some(x=>x.token===m.raw))continue;const mapped=byLabel.get(normalizeNameKey(String(m.label||'').replace(/[_-]+/g,' ')));if(!mapped)throw new Error('NameLock validation failed: unknown placeholder '+m.raw);out=out.split(m.raw).join(mapped)}return out}
-function restoreNameLocks(text,locks){let out=String(text||'');for(const x of locks){out=out.split(x.token).join(x.translation);for(const a of x.aliases||[])out=out.split(a).join(x.translation);out=out.split(x.original).join(x.translation)}if(/\[\[NAMELOCK_[^\]]+\]\]/i.test(out))throw new Error('NameLock validation failed: unresolved placeholder remains');return out}
-function lockedGlossaryText(g,locks){const lines=[];for(const [type,arr] of Object.entries(g||{}))for(const x of arr||[]){const original=String(x.original||'').trim();const matching=locks.filter(l=>normalizeNameKey(l.original)===normalizeNameKey(original));const tokens=[...new Set(matching.map(l=>l.token))];const aliases=[...new Set(matching.flatMap(l=>l.aliases||[]))];const tokenLabel=tokens.length?tokens.join(', '):original;const forms=aliases.length?' | source forms: '+[original,...aliases].join(' / '):'';lines.push(type+': '+tokenLabel+' => '+x.translation+forms+(x.voice?' | voice: '+x.voice:'')+(x.note?' | note: '+x.note:''))}return lines.join(String.fromCharCode(10))||'(none)'}
-`;
+function repairInventedNameLocks(text,locks){
+  const out=String(text||''),known=new Set(locks.map(x=>x.token));
+  for(const token of findNameLockTokens(out))if(!known.has(token.raw))throw new Error('NameLock validation failed: unknown placeholder '+token.raw);
+  return out;
+}
+function restoreNameLocks(text,locks){
+  let out=String(text||'');for(const x of locks)out=out.split(x.token).join(x.translation);
+  if(/\\\\[\\\\[NAMELOCK_[^\\\\]]+\\\\]\\\\]/i.test(out))throw new Error('NameLock validation failed: unresolved placeholder remains');
+  return out;
+}
+function lockedGlossaryText(g,locks){
+  const lockMap=new Map(locks.map(x=>[normalizeNameKey(x.original),x])),lines=[];
+  for(const [type,arr] of Object.entries(g||{}))for(const x of arr||[]){
+    const original=String(x.original||'').trim(),lock=type==='characters'?lockMap.get(normalizeNameKey(original)):null;
+    lines.push(type+': '+(lock?lock.token:original)+' => '+x.translation+(x.voice?' | voice: '+x.voice:'')+(x.note?' | note: '+x.note:''));
+  }
+  return lines.join(String.fromCharCode(10))||'(none)';
+}`;
 source=source.slice(0,lockStart)+lockReplacement+source.slice(lockEnd);
 
 // Stronger translation prompt rule: model must never invent NameLock tokens.
