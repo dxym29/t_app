@@ -60,7 +60,7 @@ const lockStart=source.indexOf('function buildNameLocks(');
 const lockEnd=source.indexOf('function countChars(',lockStart);
 if(lockStart<0||lockEnd<0)throw new Error('NameLock helpers could not be patched safely.');
 const lockReplacement=`function normalizeNameKey(v){return String(v||'').normalize('NFKC').replace(/[“”"']/g,'').replace(/\\s+/g,' ').trim().toLowerCase()}
-function escapeNameRegex(v){return String(v||'').replace(/[.*+?^${}()|[\\]\\\\]/g,'\\\\$&')}
+function escapeNameRegex(v){return String(v||'').replace(/[.*+?^$(){}|[\\]\\\\]/g,'\\\\function escapeNameRegex(v){return String(v||'').replace(/[.*+?^${}()|[\\]\\\\]/g,'\\\\$&')}')}
 function sourceTermAppears(text,term){
   const value=String(term||'').trim();
   if(!value)return false;
