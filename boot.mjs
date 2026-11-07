@@ -11,10 +11,10 @@ let source=await fs.readFile(sourcePath,'utf8');
 const start=source.indexOf('async function buildTemplateWorkbook');
 const end=source.indexOf("\napp.get('/api/export/template/:id'",start);
 if(start<0||end<0)throw new Error('Excel export function could not be patched safely.');
-const replacement=`async function buildTemplateWorkbook(novelId){
+const replacement=`async function buildTemplateWorkbook(novelId,fromChapter=null,toChapter=null){
   const novel=await q(supabase.from('novels').select('*').eq('id',novelId).single());
   const glossary=await q(supabase.from('glossary_terms').select('*').eq('novel_id',novelId).order('created_at'));
-  const episodes=(await q(supabase.from('episodes').select('*').eq('novel_id',novelId))).sort((a,b)=>Number(a.number)-Number(b.number));
+  let episodes=(await q(supabase.from('episodes').select('*').eq('novel_id',novelId))).sort((a,b)=>Number(a.number)-Number(b.number));\n  const from=Number(fromChapter),to=Number(toChapter);\n  if(Number.isInteger(from)&&from>0)episodes=episodes.filter(e=>Number(e.number)>=from);\n  if(Number.isInteger(to)&&to>0)episodes=episodes.filter(e=>Number(e.number)<=to);
   const wb=new ExcelJS.Workbook();
   wb.creator='MM Novel workbook';
   const purple='FF4338CA',white='FFFFFFFF';
