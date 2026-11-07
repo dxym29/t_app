@@ -1,12 +1,28 @@
+let outputStatusRows=[];
 async function loadOutputStatus(){
   if(!currentNovel)return;
-  const rows=await api(`/api/episodes/${currentNovel.id}/output-status`);
-  const host=$('outputStatusTable');if(!host)return;
-  const yes='<span class="statusYes">ရှိ</span>',no='<span class="statusNo">မရှိ</span>';
-  host.innerHTML='<div class="tableWrap"><table class="outputTable"><thead><tr><th>Chapter</th><th>Raw</th><th>Translation</th></tr></thead><tbody>'+
-    rows.map(x=>`<tr><td>#${esc(String(x.number))} ${esc(x.title||'')}</td><td>${x.raw?yes:no}</td><td>${x.translation?yes:no}</td></tr>`).join('')+
-    '</tbody></table></div>';
+  outputStatusRows=await api(`/api/episodes/${currentNovel.id}/output-status`);
+  renderOutputStatus();
 }
+function renderOutputStatus(){
+  const host=$('outputStatusTable');if(!host)return;
+  const field=$('outputStatusField')?.value||'raw';
+  const state=$('outputStatusState')?.value||'missing';
+  const label=field==='raw'?'Raw':'Translation';
+  const rows=outputStatusRows.filter(x=>Boolean(x[field])===(state==='exists'));
+  host.innerHTML=`<p class="muted">${label} ${state==='exists'?'ရှိ':'မရှိ'}တဲ့ Chapter ${rows.length} ခု</p>`+
+    (rows.length?rows.map(x=>`<button type="button" class="ep outputStatusItem" data-output-episode="${esc(String(x.id))}" style="display:block;width:100%;text-align:left;margin:6px 0;cursor:pointer"><b>#${esc(String(x.number))} ${esc(x.title||'')}</b><small style="display:block">ဖွင့်ရန် နှိပ်ပါ</small></button>`).join(''):'<p class="muted">ကိုက်ညီတဲ့ Chapter မရှိပါ။</p>');
+}
+document.addEventListener('change',e=>{if(e.target?.id==='outputStatusField'||e.target?.id==='outputStatusState')renderOutputStatus()});
+document.addEventListener('click',async e=>{
+  const item=e.target.closest('[data-output-episode]');if(!item)return;
+  const episode=episodes.find(x=>String(x.id)===item.dataset.outputEpisode);if(!episode)return;
+  try{
+    $('episodeSelect').value=episode.id;
+    await loadEpisode(episode);
+    $('episodeEditor')?.scrollIntoView({behavior:'smooth',block:'start'});
+  }catch(err){setStatus(err.message||'Could not open chapter')}
+});
 const $=id=>document.getElementById(id);
 let novels=[],episodes=[],glossary=null,currentNovel=null,currentEpisode=null,extractedCandidates=[];
 async function api(url,opts={}){const r=await fetch(url,{headers:{'Content-Type':'application/json',...(opts.headers||{})},...opts});const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||'Request failed');return j}
