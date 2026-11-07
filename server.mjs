@@ -99,8 +99,10 @@ function validatePolishOutput(text,source,finishReasons=[]){
  if(!out)issues.push('empty output');
  const reasons=(finishReasons||[]).map(x=>String(x||'').toUpperCase());
  if(reasons.some(x=>['MAX_TOKENS','SAFETY','RECITATION'].includes(x)))issues.push('model finish reason: '+reasons.join(','));
- const foreign=(out.match(/[\p{Script=Latin}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Cyrillic}\p{Script=Arabic}]/gu)||[]).length;
- if(foreign)issues.push('foreign-script characters: '+foreign);
+ const foreign=(out.match(/[\\p{Script=Latin}\\p{Script=Han}\\p{Script=Hiragana}\\p{Script=Katakana}\\p{Script=Hangul}\\p{Script=Cyrillic}\\p{Script=Arabic}]/gu)||[]).length;
+ // Small residual names/acronyms should not block long Myanmar chapters.
+ // Correct only when foreign text is material in both size and ratio.
+ if(foreign>20&&foreign/Math.max(out.length,1)>0.005)issues.push('foreign-script characters: '+foreign+' ('+(foreign/Math.max(out.length,1)*100).toFixed(2)+'%)');
  const a=countChars(input),b=countChars(out);
  if(a>=600&&b<a*.55)issues.push('output too short: '+b+'/'+a+' characters');
  const ip=input.split(/\n\s*\n/).filter(x=>x.trim()).length,op=out.split(/\n\s*\n/).filter(x=>x.trim()).length;
@@ -155,10 +157,14 @@ app.post('/api/polish',async(req,res)=>{try{
   raw=String(r.text||'').trim();
   if(!validateLockedOutput(raw,locks,expected))throw new Error('Polish validation failed on corrective pass: protected name/term changed. Original translation was not replaced.');
   polished=restoreNameLocks(raw,locks);issues=validatePolishOutput(polished,translation,r.finishReasons);
-  if(issues.length)throw new Error('Polish output validation failed after corrective pass: '+issues.join('; ')+'. Original translation was not replaced.');
+  const hardIssues=issues.filter(x=>!x.startsWith('foreign-script characters:'));
+  const softIssues=issues.filter(x=>x.startsWith('foreign-script characters:'));
+  if(hardIssues.length)throw new Error('Polish output validation failed after corrective pass: '+hardIssues.join('; ')+'. Original translation was not replaced.');
+  if(softIssues.length)console.warn('POLISH: accepted output with foreign-script residue after corrective pass: '+softIssues.join('; '));
  }
+ const validationWarnings=issues.filter(x=>x.startsWith('foreign-script characters:'));
  if(episodeId)await q(supabase.from('episodes').update({translation:polished,updated_at:new Date().toISOString()}).eq('id',episodeId).eq('novel_id',novelId));
- res.json({translation:polished,model:r.model,pass1Chars:countChars(translation),pass2Chars:countChars(polished),changed:normalizeForCompare(polished)!==normalizeForCompare(translation),validated:true});
+ res.json({translation:polished,model:r.model,pass1Chars:countChars(translation),pass2Chars:countChars(polished),changed:normalizeForCompare(polished)!==normalizeForCompare(translation),validated:true,validationWarnings});
 }catch(e){fail(res,e)}});
 function slugify(value){return String(value||'novel').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Za-z0-9]+/g,'-').replace(/^-+|-+$/g,'').toLowerCase()||'novel'}
 function excelValue(value){return value==null?'':String(value)}
