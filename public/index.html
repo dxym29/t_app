@@ -41,7 +41,7 @@
   <section class="card"><h2>Website Export / Backup</h2><p class="muted">Export the selected novel as the exact MM Novel workbook format. Choose a starting and ending chapter to export only that range. Leave both blank to export the whole novel. The workbook template and its columns remain unchanged. JSON backup remains available for database moves.</p><div class="row"><label>From chapter <input id="exportFromChapter" type="number" min="1" placeholder="e.g. 100"></label><label>To chapter <input id="exportToChapter" type="number" min="1" placeholder="e.g. 200"></label><button id="exportTemplateBtn" class="primary">Export Website Excel</button><button id="exportNovelBtn">Export JSON Backup</button><button id="exportAllBtn">Export All JSON</button><label class="fileBtn">Import Backup<input id="importFile" type="file" accept=".json" hidden></label></div></section>
   <section class="card"><h2>Chapter Finder</h2><p class="muted">Raw သို့မဟုတ် Translation ကိုရွေးပြီး ရှိ/မရှိအလိုက် Chapter တွေကို စစ်နိုင်ပါတယ်။ ရလဒ်ကိုနှိပ်ရင် သက်ဆိုင်ရာ Chapter ကိုဖွင့်ပေးပါမယ်။</p><div class="row"><label class="grow">အမျိုးအစား <select id="outputStatusField"><option value="raw">Raw</option><option value="translation">Translation</option></select></label><label class="grow">အခြေအနေ <select id="outputStatusState"><option value="missing">မရှိ</option><option value="exists">ရှိ</option></select></label></div><div id="outputStatusTable" class="muted">Loading...</div></section><section class="card"><h2>Episodes</h2><div id="episodes"></div></section>
 </main>
-<script src="/app.js?v=20261107-3"></script>
+<script src="/app.js?v=20261107-4"></script>
 <script src="/series.js?v=20261014-1"></script>
 <script src="/batch.js?v=20261107-2"></script>
 <script>
