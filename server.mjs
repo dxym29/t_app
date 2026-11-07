@@ -31,7 +31,7 @@ function fail(res,e){console.error(e);return res.status(500).json({error:e.messa
 async function q(promise){const {data,error}=await promise;if(error)throw new Error(error.message);return data}
 function retryable(e){const s=String(e?.message||e);return /429|quota|RESOURCE_EXHAUSTED|503|UNAVAILABLE|overloaded|timeout|temporar/i.test(s)}
 function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
-async function generateModel(ai,prompt,model,jsonMode=false){const started=Date.now();console.log(`Trying model: ${model}`);const response=await ai.models.generateContent({model,contents:prompt,config:{temperature:jsonMode?0.2:0.7,maxOutputTokens:8192,automaticContinuation:false,...(jsonMode?{responseMimeType:'application/json'}:{}),httpOptions:{timeout:MODEL_TIMEOUT}}});const text=String(response.text||'');const candidates=response.candidates||[];const finishReasons=candidates.map(c=>c.finishReason||'unknown');const promptFeedback=response.promptFeedback?.blockReason||null;console.log(`SUCCESS: ${model} (${Date.now()-started}ms; outputChars=${text.length}; finishReason=${finishReasons.join(',')||'no-candidates'}${promptFeedback?'; blockReason='+promptFeedback:''})`);if(!text.trim())throw new Error(`Empty model output from ${model}; finishReason=${finishReasons.join(',')||'no-candidates'}${promptFeedback?'; blockReason='+promptFeedback:''}`);return {text,model}}
+async function generateModel(ai,prompt,model,jsonMode=false){const started=Date.now();console.log(`Trying model: ${model}`);const response=await ai.models.generateContent({model,contents:prompt,config:{temperature:jsonMode?0.2:0.7,maxOutputTokens:8192,automaticContinuation:false,...(jsonMode?{responseMimeType:'application/json'}:{}),httpOptions:{timeout:MODEL_TIMEOUT}}});const text=String(response.text||'');const candidates=response.candidates||[];const finishReasons=candidates.map(c=>c.finishReason||'unknown');const promptFeedback=response.promptFeedback?.blockReason||null;console.log(`SUCCESS: ${model} (${Date.now()-started}ms; outputChars=${text.length}; finishReason=${finishReasons.join(',')||'no-candidates'}${promptFeedback?'; blockReason='+promptFeedback:''})`);if(!text.trim())throw new Error(`Empty model output from ${model}; finishReason=${finishReasons.join(',')||'no-candidates'}${promptFeedback?'; blockReason='+promptFeedback:''}`);return {text,model,finishReasons,promptFeedback}}
 async function generateWithRetries(ai,prompt,model,jsonMode=false){let lastError;for(let attempt=0;attempt<=MAX_RETRIES_PER_MODEL;attempt++){try{return await generateModel(ai,prompt,model,jsonMode)}catch(e){lastError=e;if(!retryable(e)||attempt===MAX_RETRIES_PER_MODEL)throw e;console.log(`${model} failed (attempt ${attempt+1}/${MAX_RETRIES_PER_MODEL}). Retrying in 5s...`);await sleep(RETRY_DELAY)}}throw lastError}
 async function runTwoModelTask(ai,prompt,tag){const jsonMode=tag==='GLOSSARY';try{return await generateWithRetries(ai,prompt,MODELS[0],jsonMode)}catch(e){if(!retryable(e))throw e;console.log(`${tag}: 3.1 exhausted after 2 retries. Switching to 3.5.`);return await generateWithRetries(ai,prompt,MODELS[1],jsonMode)}}
 async function runPolishTask(prompt,tag){try{return await runTwoModelTask(aiPolish,prompt,tag)}catch(e){if(!retryable(e)||!aiPolishFallback)throw e;console.log(`${tag}: primary polish API exhausted. Switching to separate polish fallback API.`);return await generateWithRetries(aiPolishFallback,prompt,POLISH_FALLBACK_MODEL,false)}}
@@ -94,6 +94,24 @@ ${source}`}
 async function getGlossary(novelId){const rows=await q(supabase.from('glossary_terms').select('*').eq('novel_id',novelId).order('created_at'));const g={characters:[],items:[],locations:[],organizations:[],skills:[],other:[]};for(const r of rows)(g[r.type]??g.other).push(r);return g}
 function validateGlossaryObject(x){return x&&typeof x==='object'&&['characters','items','organizations','locations'].every(k=>Array.isArray(x[k]))}
 function validateLockedOutput(text,locks,expectedCounts){for(const x of locks){const expected=expectedCounts.get(x.token);if(expected===undefined)continue;const actual=countToken(text,x.token);if(actual!==expected)return false}return true}
+function validatePolishOutput(text,source,finishReasons=[]){
+ const out=String(text||'').trim(),input=String(source||'').trim(),issues=[];
+ if(!out)issues.push('empty output');
+ const reasons=(finishReasons||[]).map(x=>String(x||'').toUpperCase());
+ if(reasons.some(x=>['MAX_TOKENS','SAFETY','RECITATION'].includes(x)))issues.push('model finish reason: '+reasons.join(','));
+ const foreign=(out.match(/[\p{Script=Latin}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Cyrillic}\p{Script=Arabic}]/gu)||[]).length;
+ if(foreign)issues.push('foreign-script characters: '+foreign);
+ const a=countChars(input),b=countChars(out);
+ if(a>=600&&b<a*.55)issues.push('output too short: '+b+'/'+a+' characters');
+ const ip=input.split(/\n\s*\n/).filter(x=>x.trim()).length,op=out.split(/\n\s*\n/).filter(x=>x.trim()).length;
+ if(ip>=8&&op<Math.ceil(ip*.35))issues.push('paragraph count reduced: '+op+'/'+ip);
+ return issues;
+}
+function polishValidationRetryPrompt(source,issues){
+ const p=polishPrompt(source,true),anchor='Return ONLY the polished Myanmar text. No preface, labels, notes, or explanation.';
+ if(!p.includes(anchor))throw new Error('Could not construct Polish validation retry prompt.');
+ return p.replace(anchor,'Fix these validation issues: '+issues.join('; ')+'. Re-read and polish the complete input without omitting any story detail. Myanmar script only.\\n'+anchor);
+}
 
 app.get('/api/health',(_,res)=>res.json({ok:true}));
 app.get('/api/usage',(_,res)=>res.json(globalThis.getGeminiApiUsage?globalThis.getGeminiApiUsage():{day:'',count:0,timezone:'Asia/Bangkok'}));
@@ -119,8 +137,29 @@ app.post('/api/translate',async(req,res)=>{try{const {novelId,episodeId,source}=
 function parseGlossaryJson(text){const raw=String(text||'').trim().replace(/^\uFEFF/,'').replace(/^\`\`\`(?:json)?\s*/i,'').replace(/\s*\`\`\`$/,'').trim();try{return JSON.parse(raw)}catch(firstError){const start=raw.indexOf('{');if(start<0)throw firstError;let depth=0,inString=false,escaped=false;for(let i=start;i<raw.length;i++){const ch=raw[i];if(inString){if(escaped)escaped=false;else if(ch==='\\')escaped=true;else if(ch==='"')inString=false;continue}if(ch==='"'){inString=true;continue}if(ch==='{')depth++;else if(ch==='}'&&--depth===0){const candidate=raw.slice(start,i+1);try{return JSON.parse(candidate)}catch{return JSON.parse(candidate.replace(/,\s*([}\]])/g,'$1'))}}}throw firstError}}
 app.post('/api/extract-glossary',async(req,res)=>{try{const {source}=req.body;if(!source?.trim())return res.status(400).json({error:'Source is required'});const r=await runTwoModelTask(aiGlossary,glossaryPrompt(source),'GLOSSARY');let data;try{data=parseGlossaryJson(r.text)}catch{throw new Error('Glossary AI returned invalid JSON. Please try again.')}if(!validateGlossaryObject(data))throw new Error('Glossary AI returned an invalid format.');res.json({glossary:data,model:r.model,sourceChars:countChars(source)})}catch(e){fail(res,e)}});
 
-app.post('/api/polish',async(req,res)=>{try{const {novelId,episodeId,translation}=req.body;if(!novelId||!translation?.trim())return res.status(400).json({error:'Novel and translation are required'});let episodeSource='';if(episodeId){const episode=await q(supabase.from('episodes').select('source').eq('id',episodeId).eq('novel_id',novelId).single());episodeSource=episode?.source||''}const allGlossary=await getGlossary(novelId);const glossary=episodeSource?filterGlossaryToSource(allGlossary,episodeSource):allGlossary;const locks=buildNameLocks(glossary);const locked=lockTranslationText(translation,locks);const expected=new Map();for(const x of locks)expected.set(x.token,countToken(locked,x.token));let r=await runPolishTask(polishPrompt(locked,false),'POLISH');if(!validateLockedOutput(r.text,locks,expected))throw new Error('Polish validation failed: a protected name/term changed. The original translation was not replaced.');let polished=restoreNameLocks(r.text.trim(),locks);if(normalizeForCompare(polished)===normalizeForCompare(translation)){console.log('POLISH: output unchanged after first attempt. Running one stronger editorial pass.');r=await runPolishTask(polishPrompt(locked,true),'POLISH-REVISE');if(!validateLockedOutput(r.text,locks,expected))throw new Error('Polish validation failed: a protected name/term changed during the revision pass. The original translation was not replaced.');polished=restoreNameLocks(r.text.trim(),locks)}if(episodeId)await q(supabase.from('episodes').update({translation:polished,updated_at:new Date().toISOString()}).eq('id',episodeId).eq('novel_id',novelId));res.json({translation:polished,model:r.model,pass1Chars:countChars(translation),pass2Chars:countChars(polished),changed:normalizeForCompare(polished)!==normalizeForCompare(translation)})}catch(e){fail(res,e)}});
-
+app.post('/api/polish',async(req,res)=>{try{
+ const {novelId,episodeId,translation}=req.body;
+ if(!novelId||!translation?.trim())return res.status(400).json({error:'Novel and translation are required'});
+ let episodeSource='';
+ if(episodeId){const ep=await q(supabase.from('episodes').select('source').eq('id',episodeId).eq('novel_id',novelId).single());episodeSource=ep?.source||''}
+ const allGlossary=await getGlossary(novelId),glossary=episodeSource?filterGlossaryToSource(allGlossary,episodeSource):allGlossary;
+ const locks=buildNameLocks(glossary),locked=lockTranslationText(translation,locks),expected=new Map();
+ for(const x of locks)expected.set(x.token,countToken(locked,x.token));
+ let r=await runPolishTask(polishPrompt(locked,false),'POLISH'),raw=String(r.text||'').trim();
+ if(!validateLockedOutput(raw,locks,expected))throw new Error('Polish validation failed: protected name/term changed. Original translation was not replaced.');
+ let polished=restoreNameLocks(raw,locks),issues=validatePolishOutput(polished,translation,r.finishReasons);
+ if(normalizeForCompare(polished)===normalizeForCompare(translation)&&!issues.length)issues.push('output unchanged; no editing was performed');
+ if(issues.length){
+  console.warn('POLISH validation failed; one corrective pass: '+issues.join('; '));
+  r=await runPolishTask(polishValidationRetryPrompt(locked,issues),'POLISH-VALIDATION-RETRY');
+  raw=String(r.text||'').trim();
+  if(!validateLockedOutput(raw,locks,expected))throw new Error('Polish validation failed on corrective pass: protected name/term changed. Original translation was not replaced.');
+  polished=restoreNameLocks(raw,locks);issues=validatePolishOutput(polished,translation,r.finishReasons);
+  if(issues.length)throw new Error('Polish output validation failed after corrective pass: '+issues.join('; ')+'. Original translation was not replaced.');
+ }
+ if(episodeId)await q(supabase.from('episodes').update({translation:polished,updated_at:new Date().toISOString()}).eq('id',episodeId).eq('novel_id',novelId));
+ res.json({translation:polished,model:r.model,pass1Chars:countChars(translation),pass2Chars:countChars(polished),changed:normalizeForCompare(polished)!==normalizeForCompare(translation),validated:true});
+}catch(e){fail(res,e)}});
 function slugify(value){return String(value||'novel').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Za-z0-9]+/g,'-').replace(/^-+|-+$/g,'').toLowerCase()||'novel'}
 function excelValue(value){return value==null?'':String(value)}
 async function fetchExportRows(table, columns, novelId, orderColumn, batchSize=25){
@@ -132,10 +171,10 @@ async function fetchExportRows(table, columns, novelId, orderColumn, batchSize=2
   }
   return rows;
 }
-async function buildTemplateWorkbook(novelId){
+async function buildTemplateWorkbook(novelId,fromChapter=null,toChapter=null){
   const novel=await q(supabase.from('novels').select('id,name,style').eq('id',novelId).single());
   const glossary=await fetchExportRows('glossary_terms','original,translation,type,note,voice',''+novelId,'created_at',100);
-  const episodes=(await q(supabase.from('episodes').select('number,title,source,translation').eq('novel_id',''+novelId))).sort((a,b)=>Number(a.number)-Number(b.number));
+  let episodes=(await q(supabase.from('episodes').select('number,title,source,translation').eq('novel_id',''+novelId))).sort((a,b)=>Number(a.number)-Number(b.number));\n  const from=Number(fromChapter),to=Number(toChapter);\n  if(Number.isInteger(from)&&from>0)episodes=episodes.filter(e=>Number(e.number)>=from);\n  if(Number.isInteger(to)&&to>0)episodes=episodes.filter(e=>Number(e.number)<=to);
   const wb=new ExcelJS.Workbook();
   wb.creator='Webnovel Translator';
   wb.created=new Date();
@@ -176,7 +215,7 @@ async function buildTemplateWorkbook(novelId){
   }
   return wb;
 }
-app.get('/api/export/template/:id',async(req,res)=>{try{const wb=await buildTemplateWorkbook(req.params.id);const buffer=await wb.xlsx.writeBuffer();const novel=await q(supabase.from('novels').select('name').eq('id',req.params.id).single());res.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');res.setHeader('Content-Disposition',`attachment; filename="${slugify(novel.name)}-mm-novel.xlsx"`);res.setHeader('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate');res.setHeader('Pragma','no-cache');res.setHeader('Expires','0');res.setHeader('X-Workbook-Export-Version','chapter-sequence-v2');res.send(Buffer.from(buffer))}catch(e){fail(res,e)}});
+app.get('/api/export/template/:id',async(req,res)=>{try{const fromChapter=req.query.fromChapter??null,toChapter=req.query.toChapter??null;for(const v of [fromChapter,toChapter])if(v!==null&&(!/^\\d+$/.test(String(v))||Number(v)<1))return res.status(400).json({error:'Chapter range must use positive whole numbers.'});if(fromChapter!==null&&toChapter!==null&&Number(fromChapter)>Number(toChapter))return res.status(400).json({error:'Starting chapter must not be greater than ending chapter.'});const wb=await buildTemplateWorkbook(req.params.id,fromChapter,toChapter);const buffer=await wb.xlsx.writeBuffer();const novel=await q(supabase.from('novels').select('name').eq('id',req.params.id).single());res.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');res.setHeader('Content-Disposition',`attachment; filename="${slugify(novel.name)}-mm-novel.xlsx"`);res.setHeader('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate');res.setHeader('Pragma','no-cache');res.setHeader('Expires','0');res.setHeader('X-Workbook-Export-Version','chapter-sequence-v2');res.send(Buffer.from(buffer))}catch(e){fail(res,e)}});
 async function exportNovel(novelId){const novel=await q(supabase.from('novels').select('*').eq('id',novelId).single());const glossary=await q(supabase.from('glossary_terms').select('*').eq('novel_id',novelId));const episodes=await q(supabase.from('episodes').select('*').eq('novel_id',novelId).order('number'));return {version:2,exportedAt:new Date().toISOString(),novels:[novel],glossary,episodes}}
 app.get('/api/export/novel/:id',async(req,res)=>{try{res.setHeader('Content-Disposition','attachment; filename=novel-backup.json');res.json(await exportNovel(req.params.id))}catch(e){fail(res,e)}});
 app.get('/api/export/all',async(_,res)=>{try{const novels=await q(supabase.from('novels').select('*').order('created_at'));const glossary=await q(supabase.from('glossary_terms').select('*'));const episodes=await q(supabase.from('episodes').select('*').order('novel_id,number'));res.setHeader('Content-Disposition','attachment; filename=webnovel-backup.json');res.json({version:2,exportedAt:new Date().toISOString(),novels,glossary,episodes})}catch(e){fail(res,e)}});
