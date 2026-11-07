@@ -41,9 +41,9 @@
   <section class="card"><h2>Website Export / Backup</h2><p class="muted">Export the selected novel as the exact MM Novel workbook format. Choose a starting and ending chapter to export only that range. Leave both blank to export the whole novel. The workbook template and its columns remain unchanged. JSON backup remains available for database moves.</p><div class="row"><label>From chapter <input id="exportFromChapter" type="number" min="1" placeholder="e.g. 100"></label><label>To chapter <input id="exportToChapter" type="number" min="1" placeholder="e.g. 200"></label><button id="exportTemplateBtn" class="primary">Export Website Excel</button><button id="exportNovelBtn">Export JSON Backup</button><button id="exportAllBtn">Export All JSON</button><label class="fileBtn">Import Backup<input id="importFile" type="file" accept=".json" hidden></label></div></section>
   <section class="card"><h2>Novel chapter output status</h2><p class="muted">အခန်းတစ်ခန်းချင်းစီမှာ မူရင်းစာနဲ့ ဘာသာပြန်ရလဒ် ရှိ/မရှိကို ပြထားပါတယ်။</p><div id="outputStatusTable" class="muted">Loading...</div></section><section class="card"><h2>Episodes</h2><div id="episodes"></div></section>
 </main>
-<script src="/app.js?v=20261107-1"></script>
+<script src="/app.js?v=20261107-2"></script>
 <script src="/series.js?v=20261014-1"></script>
-<script src="/batch.js?v=20261024-4"></script>
+<script src="/batch.js?v=20261107-2"></script>
 <script>
 // Chapter-limited website Excel export. This overrides only the export button
 // handler so the rest of the existing frontend workflow stays unchanged.
