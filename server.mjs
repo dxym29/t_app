@@ -145,26 +145,49 @@ app.post('/api/polish',async(req,res)=>{try{
  let episodeSource='';
  if(episodeId){const ep=await q(supabase.from('episodes').select('source').eq('id',episodeId).eq('novel_id',novelId).single());episodeSource=ep?.source||''}
  const allGlossary=await getGlossary(novelId),glossary=episodeSource?filterGlossaryToSource(allGlossary,episodeSource):allGlossary;
- const locks=buildNameLocks(glossary),locked=lockTranslationText(translation,locks),expected=new Map();
+ // During Myanmar polishing, hard-lock character names only. Other terms are
+ // supplied as a normal glossary so a single altered term cannot abort a chapter.
+ const locks=buildNameLocks({characters:glossary.characters||[]});
+ const locked=lockTranslationText(translation,locks),expected=new Map();
  for(const x of locks)expected.set(x.token,countToken(locked,x.token));
- let r=await runPolishTask(polishPrompt(locked,false),'POLISH'),raw=String(r.text||'').trim();
- if(!validateLockedOutput(raw,locks,expected))throw new Error('Polish validation failed: protected name/term changed. Original translation was not replaced.');
- let polished=restoreNameLocks(raw,locks),issues=validatePolishOutput(polished,translation,r.finishReasons);
- if(normalizeForCompare(polished)===normalizeForCompare(translation)&&!issues.length)issues.push('output unchanged; no editing was performed');
+ const glossaryLines=[];
+ for(const [type,arr] of Object.entries(glossary||{}))for(const item of arr||[]){
+   const original=String(item.original||'').trim(),translated=String(item.translation||'').trim();
+   if(original&&translated)glossaryLines.push(type+': '+original+' => '+translated);
+ }
+ const glossaryNote='\\n\\nAUTHORITATIVE MYANMAR NAME / TERM GLOSSARY (use these exact Myanmar forms consistently):\\n'+(glossaryLines.join('\\n')||'(none)');
+ const firstPrompt=polishPrompt(locked,false).replace('INPUT:',glossaryNote+'\\n\\nINPUT:');
+ let r=await runPolishTask(firstPrompt,'POLISH'),raw=String(r.text||'').trim();
+ let lockValid=validateLockedOutput(raw,locks,expected);
+ let polished=lockValid?restoreNameLocks(raw,locks):'';
+ let issues=lockValid?validatePolishOutput(polished,translation,r.finishReasons):['protected character-name token mismatch'];
+ if(normalizeForCompare(polished||raw)===normalizeForCompare(translation)&&!issues.length)issues.push('output unchanged; no editing was performed');
  if(issues.length){
-  console.warn('POLISH validation failed; one corrective pass: '+issues.join('; '));
-  r=await runPolishTask(polishValidationRetryPrompt(locked,issues),'POLISH-VALIDATION-RETRY');
+  console.warn('POLISH validation requires one corrective pass: '+issues.join('; '));
+  const retryBase=polishValidationRetryPrompt(locked,issues);
+  const retryPrompt=retryBase.replace('INPUT:',glossaryNote+'\\n\\nINPUT:');
+  r=await runPolishTask(retryPrompt,'POLISH-VALIDATION-RETRY');
   raw=String(r.text||'').trim();
-  if(!validateLockedOutput(raw,locks,expected))throw new Error('Polish validation failed on corrective pass: protected name/term changed. Original translation was not replaced.');
-  polished=restoreNameLocks(raw,locks);issues=validatePolishOutput(polished,translation,r.finishReasons);
+  lockValid=validateLockedOutput(raw,locks,expected);
+  if(lockValid){
+    polished=restoreNameLocks(raw,locks);
+    issues=validatePolishOutput(polished,translation,r.finishReasons);
+  }else{
+    issues=['protected character-name token mismatch after corrective pass'];
+  }
   const hardIssues=issues.filter(x=>!x.startsWith('foreign-script characters:'));
   const softIssues=issues.filter(x=>x.startsWith('foreign-script characters:'));
-  if(hardIssues.length)throw new Error('Polish output validation failed after corrective pass: '+hardIssues.join('; ')+'. Original translation was not replaced.');
-  if(softIssues.length)console.warn('POLISH: accepted output with foreign-script residue after corrective pass: '+softIssues.join('; '));
+  if(hardIssues.length){
+    // Never save a version with uncertain character names or incomplete output.
+    // Return the untouched Pass 1 translation as a successful safe fallback.
+    console.warn('POLISH: corrective pass still failed validation; preserving original Pass 1 translation: '+hardIssues.join('; '));
+    return res.json({translation,model:r.model,pass1Chars:countChars(translation),pass2Chars:countChars(translation),changed:false,validated:false,polishFallback:true,validationWarnings:hardIssues});
+  }
+  if(softIssues.length)console.warn('POLISH: accepted output with minor foreign-script residue after corrective pass: '+softIssues.join('; '));
  }
  const validationWarnings=issues.filter(x=>x.startsWith('foreign-script characters:'));
  if(episodeId)await q(supabase.from('episodes').update({translation:polished,updated_at:new Date().toISOString()}).eq('id',episodeId).eq('novel_id',novelId));
- res.json({translation:polished,model:r.model,pass1Chars:countChars(translation),pass2Chars:countChars(polished),changed:normalizeForCompare(polished)!==normalizeForCompare(translation),validated:true,validationWarnings});
+ res.json({translation:polished,model:r.model,pass1Chars:countChars(translation),pass2Chars:countChars(polished),changed:normalizeForCompare(polished)!==normalizeForCompare(translation),validated:true,polishFallback:false,validationWarnings});
 }catch(e){fail(res,e)}});
 function slugify(value){return String(value||'novel').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Za-z0-9]+/g,'-').replace(/^-+|-+$/g,'').toLowerCase()||'novel'}
 function excelValue(value){return value==null?'':String(value)}
