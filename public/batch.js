@@ -109,7 +109,17 @@
         }
         $('translation').value=p1.translation;$('polishedTranslation').value='';currentEpisode.translation=p1.translation;updateStats();
         let finalText=p1.translation;
-        try{$('batchStatus').textContent=`${label} • Phase 2 Polish...`;const p2=await api('/api/polish',{method:'POST',body:JSON.stringify({novelId:currentNovel.id,episodeId:e.id,translation:p1.translation})});if(!String(p2.translation||'').trim())throw new Error('Polish returned empty output.');finalText=p2.translation;$('polishedTranslation').value=finalText;updateStats()}catch(polishError){polishSkipped++;polishErrors.push(`#${e.number}: ${polishError.message||'Polish failed'}`);finalText=p1.translation;$('polishedTranslation').value='';updateStats();$('batchStatus').textContent=`${label} • Phase 2 error → skipping Polish, saving Pass 1...`}
+        try{$('batchStatus').textContent=`${label} • Phase 2 Polish...`;const p2=await api('/api/polish',{method:'POST',body:JSON.stringify({novelId:currentNovel.id,episodeId:e.id,translation:p1.translation})});if(!String(p2.translation||'').trim())throw new Error('Polish returned empty output.');finalText=p2.translation;$('polishedTranslation').value=finalText;updateStats()}catch(polishError){
+          polishSkipped++;polishErrors.push(`#${e.number}: ${polishError.message||'Polish failed'}`);
+          $('polishedTranslation').value='';updateStats();
+          if(polishError.code==='POLISH_LANGUAGE_REJECTED'||/POLISH_LANGUAGE_REJECTED/.test(String(polishError.message||''))){
+            skipped++;skippedReasons.push(`#${e.number}: Myanmar-only Polish validation failed; chapter not accepted.`);
+            $('translation').value='';currentEpisode.translation='';$('batchStatus').textContent=`${label} • skipped — final output was not Myanmar-only`;
+            setStatus(`${label} skipped — final output was not Myanmar-only. Continuing batch...`,false);
+            continue;
+          }
+          finalText=p1.translation;$('batchStatus').textContent=`${label} • Phase 2 error → preserving Pass 1...`;
+        }
         $('batchStatus').textContent=`${label} • Saving...`;const saved=await runUntilSuccess(label,'Save',()=>saveBatchEpisode(e,finalText));setEpisodeUI({...saved,source:e.source||saved.source||'',translation:finalText});completed++;$('batchStatus').textContent=`${label} • Saved • ${completed}/${chapters.length}`;setStatus(`Batch progress: ${completed}/${chapters.length} saved${skipped?` • ${skipped} skipped`:''}`,true);await sleep(500);
         }catch(chapterError){
           const message=String(chapterError?.message||chapterError);
