@@ -95,6 +95,7 @@ ABSOLUTE LANGUAGE POLICY — MYANMAR ONLY:
 - Do NOT leave English, Chinese, Japanese, Korean, or any other foreign-language words in the output.
 - Translate foreign words into natural Myanmar. Use the exact established Myanmar glossary equivalent for names, titles, techniques, places, organizations, items, and ranks.
 - If no established equivalent exists, express or transliterate it naturally in Myanmar script. Never keep Latin spelling or foreign-script spelling.
+- ZERO LATIN LETTERS ARE ALLOWED. Do not output English names, romanized names, acronyms, abbreviations, or English words even if they appear in the input. Convert every one into Myanmar script.
 - Do not use English labels, headings, abbreviations, explanations, or foreign-language text in parentheses.
 - Protected NameLock tokens are technical markers: copy only the tokens already supplied, exactly. Never invent a token.
 - Myanmar punctuation and necessary ordinary numerals may be retained; foreign-language words and foreign scripts may not.
@@ -137,9 +138,8 @@ function validatePolishOutput(text,source,finishReasons=[]){
  const reasons=(finishReasons||[]).map(x=>String(x||'').toUpperCase());
  if(reasons.some(x=>['MAX_TOKENS','SAFETY','RECITATION'].includes(x)))issues.push('model finish reason: '+reasons.join(','));
  const foreign=(out.match(/[\\p{Script=Latin}\\p{Script=Han}\\p{Script=Hiragana}\\p{Script=Katakana}\\p{Script=Hangul}\\p{Script=Cyrillic}\\p{Script=Arabic}]/gu)||[]).length;
- // Small residual names/acronyms should not block long Myanmar chapters.
- // Correct only when foreign text is material in both size and ratio.
- if(foreign>20&&foreign/Math.max(out.length,1)>0.005)issues.push('foreign-script characters: '+foreign+' ('+(foreign/Math.max(out.length,1)*100).toFixed(2)+'%)');
+ // Strict final-stage gate: even one foreign-script character is not accepted.
+ if(foreign>0)issues.push('foreign-script characters: '+foreign+' (Myanmar-only output required)');
  const a=countChars(input),b=countChars(out);
  if(a>=600&&b<a*.55)issues.push('output too short: '+b+'/'+a+' characters');
  const ip=input.split(/\n\s*\n/).filter(x=>x.trim()).length,op=out.split(/\n\s*\n/).filter(x=>x.trim()).length;
@@ -149,7 +149,7 @@ function validatePolishOutput(text,source,finishReasons=[]){
 function polishValidationRetryPrompt(source,issues){
  const p=polishPrompt(source,true),anchor='Return ONLY the polished Myanmar text. No preface, labels, notes, or explanation.';
  if(!p.includes(anchor))throw new Error('Could not construct Polish validation retry prompt.');
- return p.replace(anchor,'Fix these validation issues: '+issues.join('; ')+'. Re-read and polish the complete input without omitting any story detail. Myanmar script only.\\n'+anchor);
+ return p.replace(anchor,'Fix these validation issues: '+issues.join('; ')+'. Re-read and polish the complete input without omitting any story detail. STRICT REQUIREMENT: every Latin/English word must be translated or transliterated into Myanmar script. ZERO Latin letters are allowed anywhere in the final output. Before responding, scan the entire output character by character and replace every foreign-script word.\\n'+anchor);
 }
 
 app.get('/api/health',(_,res)=>res.json({ok:true}));
@@ -254,6 +254,11 @@ app.post('/api/polish',async(req,res)=>{try{
   }
   const hardIssues=issues.filter(x=>!x.startsWith('foreign-script characters:'));
   const softIssues=issues.filter(x=>x.startsWith('foreign-script characters:'));
+  if(softIssues.length){
+    console.warn('POLISH: rejected because foreign-script characters remain after corrective pass: '+softIssues.join('; '));
+    if(episodeId)await q(supabase.from('episodes').update({translation:'',updated_at:new Date().toISOString()}).eq('id',episodeId).eq('novel_id',novelId));
+    return res.status(422).json({error:'POLISH_LANGUAGE_REJECTED: final output contains foreign-language characters; chapter was not accepted.',code:'POLISH_LANGUAGE_REJECTED',validationWarnings:softIssues});
+  }
   if(hardIssues.length){
     // Never save a version with uncertain character names or incomplete output.
     // Return the untouched Pass 1 translation as a successful safe fallback.
