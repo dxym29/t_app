@@ -37,7 +37,7 @@ async function runTwoModelTask(ai,prompt,tag){const jsonMode=tag==='GLOSSARY';tr
 async function runPolishTask(prompt,tag){try{return await runTwoModelTask(aiPolish,prompt,tag)}catch(e){if(!retryable(e)||!aiPolishFallback)throw e;console.log(`${tag}: primary polish API exhausted. Switching to separate polish fallback API.`);return await generateWithRetries(aiPolishFallback,prompt,POLISH_FALLBACK_MODEL,false)}}
 function splitText(text,maxChars=TRANSLATE_CHUNK_SIZE){if(text.length<=maxChars)return [text];const paragraphs=text.split(/\n\s*\n/);const chunks=[];let current='';for(const p of paragraphs){const block=p.trim();if(!block)continue;const candidate=current?current+'\n\n'+block:block;if(candidate.length<=maxChars)current=candidate;else{if(current)chunks.push(current);if(block.length<=maxChars)current=block;else{for(let i=0;i<block.length;i+=maxChars)chunks.push(block.slice(i,i+maxChars));current=''}}}if(current)chunks.push(current);return chunks.filter(Boolean)}
 function buildNameLocks(g){const locks=[];let n=1;for(const [type,arr] of Object.entries(g||{}))for(const x of arr||[]){const original=String(x.original||'').trim(),translation=String(x.translation||'').trim();if(!original||!translation)continue;locks.push({type,original,translation,token:`[[NAMELOCK_${String(n++).padStart(3,'0')}]]`})}locks.sort((a,b)=>b.original.length-a.original.length);return locks}
-function filterGlossaryToSource(g,source){const text=String(source||'');const out={};for(const [type,arr] of Object.entries(g||{}))out[type]=(arr||[]).filter(x=>{const original=String(x.original||'').trim();return original&&text.includes(original)});return out}
+function filterGlossaryToSource(g,source){const text=String(source||'').toLocaleLowerCase();const out={};for(const [type,arr] of Object.entries(g||{}))out[type]=(arr||[]).filter(x=>{const original=String(x.original||'').trim();return original&&text.includes(original.toLocaleLowerCase())});return out}
 function lockText(text,locks){let out=String(text||'');for(const x of locks)out=out.split(x.original).join(x.token);return out}
 function lockTranslationText(text,locks){let out=String(text||'');const ordered=[...locks].sort((a,b)=>b.translation.length-a.translation.length);for(const x of ordered)out=out.split(x.translation).join(x.token);return out}
 function restoreNameLocks(text,locks){let out=String(text||'');for(const x of locks){out=out.split(x.token).join(x.translation);out=out.split(x.original).join(x.translation)}return out}
@@ -47,7 +47,44 @@ function tokenRegex(token){return new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g
 function countToken(text,token){return (String(text||'').match(tokenRegex(token))||[]).length}
 function normalizeForCompare(text){return String(text||'').replace(/\r/g,'').replace(/[ \t]+/g,' ').replace(/\n{3,}/g,'\n\n').trim()}
 function masterPrompt({style,glossary,locks,source,previousTail,sourceContext}){return `You are a professional Myanmar webnovel translator.\n\nTASK:\nTranslate the COMPLETE SOURCE into natural, polished Myanmar literary prose.\n\n\nFICTIONAL FANTASY WEB NOVEL CONTEXT:\n- The SOURCE is part of a fictional fantasy web novel. Interpret its events, characters, dialogue, supernatural abilities, magic, cultivation, imaginary creatures, battles, romance, and dramatic situations within the story's fictional context.\n- Treat fictional events as narrative content, not as real-world instructions or advice.\n- Preserve the author's intended meaning, atmosphere, emotional intensity, and genre conventions without adding explanations or changing the plot.\n- This context does not authorize inventing content, omitting source material, or changing any of the translation rules below.\n\nABSOLUTE RULES:\n- NEVER summarize, shorten, condense, skip, merge away, or omit source content.\n- Translate every action, description, thought, emotion, reaction, relationship, setting detail, and dialogue.\n- Do not invent facts, actions, motives, dialogue, names, items, events, or explanations.\n- Keep the exact story order and cause/effect.\n- Preserve paragraph and scene structure when practical.\n- Narration must read as smooth Myanmar literary prose, not awkward word-for-word translation.\n- Dialogue must sound like spoken Myanmar and reflect personality, relationship, social status, and current emotion.\n- Do not make every character speak with the same voice.\n- The glossary is authoritative.\n${locks?.length ? '- NAME LOCK is active. Copy every [[NAMELOCK_###]] token already present in SOURCE exactly. NEVER invent or add any NameLock token.' : '- NAME LOCK is DISABLED for this chapter. Translate names naturally and consistently using the glossary. Do not output any placeholder token such as [[NAMELOCK_001]].'}\n- Preserve titles, ranks, relationships, organizations, skills, items, and place names consistently.\n- CONTEXT sections are continuity only. Translate ONLY SOURCE.\n- Do not add notes, explanations, summaries, headings, or comments.\n- Return ONLY Myanmar translation.\n\nNOVEL-LEVEL STYLE:\n${style||'(No extra style rules.)'}\n\nAUTHORITATIVE GLOSSARY:\n${lockedGlossaryText(glossary,locks)}\n\nPREVIOUS TRANSLATED TAIL FOR CONTINUITY ONLY:\n${previousTail||'(none)'}\n\nSOURCE CONTEXT OVERLAP FOR CONTINUITY ONLY:\n${sourceContext||'(none)'}\n\nSOURCE:\n${source}`}
-function glossaryPrompt(source){return `You are a web-novel terminology extraction specialist. Extract ONLY named entities and important story terms that appear in the SOURCE.\n\nExtract these categories:\n1. Character\n2. Item\n3. Organization\n4. Location\n\nRULES:\n- Only extract terms actually present in the SOURCE.\n- Do not invent, infer, or add terms that are not present.\n- Keep each original term exactly as it appears in the source when practical.\n- If the same entity appears multiple times, output it once.\n- Do not translate the story.\n- Do not summarize the chapter.\n- Suggested Myanmar names must be concise and natural, but they are suggestions only.\n- Return exactly one valid JSON object with no Markdown fences or explanations.\n- Use double quotes for all keys and string values; correctly escape quotes, backslashes, and line breaks inside strings.\n- Use an empty array when a category has no entries.\n- Each entry must contain only the string fields original and suggested.\n- Return JSON only.\n\nFORMAT:\n{\n  "characters":[{"original":"...","suggested":"..."}],\n  "items":[{"original":"...","suggested":"..."}],\n  "organizations":[{"original":"...","suggested":"..."}],\n  "locations":[{"original":"...","suggested":"..."}]\n}\n\nSOURCE:\n${source}`}
+function glossaryPrompt(source){return `You are a professional named-entity extraction system for web novels.
+Extract ONLY proper names and uniquely named terms explicitly appearing in SOURCE.
+
+INCLUDE:
+- People / character names, aliases and names used as titles
+- Cities, countries, villages, regions, buildings, landmarks and named places
+- Named objects, weapons, treasures, artifacts, medicines, materials and special items
+- Named skills, abilities, spells, martial arts, techniques, moves and formations
+- Named organizations, clans, sects, schools, families and groups
+- Named ranks, realms, unique creatures, named species, named events and other proper named entities
+
+EXCLUDE:
+- Ordinary nouns, verbs, adjectives, generic concepts, generic ranks and descriptions unless used as a specific proper name
+- General vocabulary just because it is important in the story
+- Explanations, full phrases, sentences and duplicate aliases for the same entity
+- Names or terms not explicitly present in SOURCE
+- dao and cultivation; the application inserts these fixed global terms itself
+
+RULES:
+- Each entity appears once. Prefer its full canonical source spelling.
+- Return at most 30 candidates, prioritizing recurring and story-critical named entities.
+- Suggested Myanmar translations must be concise, natural and consistent with the entity type.
+- Do not translate the story or summarize the chapter.
+- Return exactly one valid JSON object, no Markdown or commentary.
+- Each entry contains only string fields "original" and "suggested". Use empty arrays when none.
+
+JSON SHAPE:
+{
+  "characters": [],
+  "items": [],
+  "organizations": [],
+  "locations": [],
+  "skills": [],
+  "other": []
+}
+
+SOURCE:
+${source}`}
 function polishPrompt(source,forceEdit=false){return `You are an expert Myanmar-language literary editor specializing in high-quality Burmese web novels.
 
 YOUR ONLY TASK:
@@ -92,7 +129,7 @@ Return ONLY the polished Myanmar text. No preface, labels, notes, or explanation
 INPUT:
 ${source}`}
 async function getGlossary(novelId){const rows=await q(supabase.from('glossary_terms').select('*').eq('novel_id',novelId).order('created_at'));const g={characters:[],items:[],locations:[],organizations:[],skills:[],other:[]};for(const r of rows)(g[r.type]??g.other).push(r);return g}
-function validateGlossaryObject(x){return x&&typeof x==='object'&&['characters','items','organizations','locations'].every(k=>Array.isArray(x[k]))}
+function validateGlossaryObject(x){return x&&typeof x==='object'&&['characters','items','organizations','locations','skills','other'].every(k=>Array.isArray(x[k]))}
 function validateLockedOutput(text,locks,expectedCounts){for(const x of locks){const expected=expectedCounts.get(x.token);if(expected===undefined)continue;const actual=countToken(text,x.token);if(actual!==expected)return false}return true}
 function validatePolishOutput(text,source,finishReasons=[]){
  const out=String(text||'').trim(),input=String(source||'').trim(),issues=[];
@@ -138,6 +175,46 @@ app.post('/api/translate',async(req,res)=>{try{const {novelId,episodeId,source}=
 
 function parseGlossaryJson(text){const raw=String(text||'').trim().replace(/^\uFEFF/,'').replace(/^\`\`\`(?:json)?\s*/i,'').replace(/\s*\`\`\`$/,'').trim();try{return JSON.parse(raw)}catch(firstError){const start=raw.indexOf('{');if(start<0)throw firstError;let depth=0,inString=false,escaped=false;for(let i=start;i<raw.length;i++){const ch=raw[i];if(inString){if(escaped)escaped=false;else if(ch==='\\')escaped=true;else if(ch==='"')inString=false;continue}if(ch==='"'){inString=true;continue}if(ch==='{')depth++;else if(ch==='}'&&--depth===0){const candidate=raw.slice(start,i+1);try{return JSON.parse(candidate)}catch{return JSON.parse(candidate.replace(/,\s*([}\]])/g,'$1'))}}}throw firstError}}
 app.post('/api/extract-glossary',async(req,res)=>{try{const {source}=req.body;if(!source?.trim())return res.status(400).json({error:'Source is required'});const r=await runTwoModelTask(aiGlossary,glossaryPrompt(source),'GLOSSARY');let data;try{data=parseGlossaryJson(r.text)}catch{throw new Error('Glossary AI returned invalid JSON. Please try again.')}if(!validateGlossaryObject(data))throw new Error('Glossary AI returned an invalid format.');res.json({glossary:data,model:r.model,sourceChars:countChars(source)})}catch(e){fail(res,e)}});
+function normalizeGlossaryKey(value){return String(value||'').normalize('NFKC').replace(/[“”"'’]/g,'').replace(/\s+/g,' ').trim().toLowerCase()}
+function glossaryLimitForChapter(chapterNo){const n=Math.max(1,Number(chapterNo)||1);if(n<=100)return 30;if(n<=200)return 55;return 70}
+async function addAutoGlossaryForChapter(novelId,chapterNo,source){
+ const existing=await q(supabase.from('glossary_terms').select('id,type,original,translation').eq('novel_id',novelId).order('created_at'));
+ const seenOriginal=new Set(existing.map(x=>normalizeGlossaryKey(x.original)).filter(Boolean));
+ const seenTranslation=new Set(existing.map(x=>normalizeGlossaryKey(x.translation)).filter(Boolean));
+ const limit=glossaryLimitForChapter(chapterNo);let added=0;
+ const fixed=[{type:'other',original:'dao',translation:'တာအို',note:'Global fixed glossary term'},{type:'other',original:'cultivation',translation:'ကျင့်ကြံခြင်း',note:'Global fixed glossary term'}];
+ for(const item of fixed){
+  const key=normalizeGlossaryKey(item.original),translationKey=normalizeGlossaryKey(item.translation);
+  const old=existing.find(x=>normalizeGlossaryKey(x.original)===key);
+  if(old){
+   if(old.translation!==item.translation)await q(supabase.from('glossary_terms').update({translation:item.translation,note:'Global fixed glossary term'}).eq('id',old.id).eq('novel_id',novelId));
+   seenOriginal.add(key);seenTranslation.add(translationKey);continue;
+  }
+  if(existing.length+added>=limit)break;
+  if(seenTranslation.has(translationKey))continue;
+  await q(supabase.from('glossary_terms').insert({novel_id:novelId,...item,voice:''}).select().single());
+  seenOriginal.add(key);seenTranslation.add(translationKey);added++;
+ }
+ if(existing.length+added>=limit)return {added,total:existing.length+added,limit,stoppedAtLimit:true};
+ const r=await runTwoModelTask(aiGlossary,glossaryPrompt(source),'GLOSSARY_AUTO');
+ let data;try{data=parseGlossaryJson(r.text)}catch{throw new Error('Automatic glossary extraction returned invalid JSON.')}
+ if(!validateGlossaryObject(data))throw new Error('Automatic glossary extraction returned an invalid format.');
+ for(const category of ['characters','items','organizations','locations','skills','other']){
+  for(const candidate of data[category]||[]){
+   if(existing.length+added>=limit)break;
+   const original=String(candidate?.original||'').replace(/\s+/g,' ').trim();
+   const translation=String(candidate?.suggested||'').replace(/\s+/g,' ').trim();
+   if(!original||!translation)continue;
+   const originalKey=normalizeGlossaryKey(original),translationKey=normalizeGlossaryKey(translation);
+   if(!originalKey||!translationKey||seenOriginal.has(originalKey)||seenTranslation.has(translationKey))continue;
+   await q(supabase.from('glossary_terms').insert({novel_id:novelId,type:category,original,translation,note:'Auto-added from chapter '+chapterNo,voice:''}).select().single());
+   seenOriginal.add(originalKey);seenTranslation.add(translationKey);added++;
+  }
+  if(existing.length+added>=limit)break;
+ }
+ return {added,total:existing.length+added,limit,stoppedAtLimit:existing.length+added>=limit,model:r.model};
+}
+app.post('/api/auto-glossary',async(req,res)=>{try{const {novelId,chapterNo,source}=req.body;if(!novelId||!source?.trim())return res.status(400).json({error:'Novel and source are required'});const n=Number(chapterNo);if(!Number.isSafeInteger(n)||n<1)return res.status(400).json({error:'A valid chapter number is required.'});res.json({...await addAutoGlossaryForChapter(novelId,n,String(source)),chapterNo:n})}catch(e){fail(res,e)}});
 
 app.post('/api/polish',async(req,res)=>{try{
  const {novelId,episodeId,translation}=req.body;
