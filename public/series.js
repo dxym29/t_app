@@ -4,7 +4,7 @@
  async function api(url,opts={}){const r=await fetch(url,{headers:{'Content-Type':'application/json',...(opts.headers||{})},...opts}),j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||'Request failed');return j}
  const sleep=ms=>new Promise(r=>setTimeout(r,ms));
  const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
- const novelId=()=>window.currentNovel?.id||localStorage.getItem('novelId');
+ const novelId=()=>window.currentNovel?.id||sessionStorage.getItem('novelId');
  function newOnes(){return(discovery?.chapters||[]).filter(c=>!existing.has(Number(c.number)))}
  function refresh(){
   if(!discovery)return;
