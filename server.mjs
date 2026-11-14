@@ -137,7 +137,11 @@ PRIORITY ORDER:
 
 MEANING AND STORY FIDELITY:
 - Preserve every fact, action, thought, emotion, relationship, description, reaction, and line of dialogue.
-- Never add, invent, remove, summarize, shorten, merge, or skip story information.
+- Never omit, invent, or change any story fact, action, thought, emotion, relationship, reaction, or dialogue meaning.
+- IMPORTANT: This is a genuine literary EDIT, not a light proofreading pass. Preserving story information does NOT mean preserving the original sentence wording, syntax, length, or structure.
+- You MAY shorten verbose wording, replace unnatural expressions, split or combine sentences, change clause order, adjust particles, and rebuild sentence rhythm whenever the same complete story information is retained.
+- Do not keep an awkward or translation-sounding sentence merely because its meaning is understandable. If a sentence is grammatical but does not sound like naturally written Burmese fiction, rewrite it.
+- Review every sentence and make a real editorial decision: rewrite unnatural sentences; retain only sentences that already sound natural, fluent, and idiomatic to a Myanmar novel reader.
 - Keep exact event order, cause and effect, speaker identity, character intent, and scene logic.
 - Do not reinterpret ambiguous details or add explanations.
 - Do not replace a specific foreign cultural item with an unrelated generic Burmese item merely to make it sound familiar.
@@ -145,7 +149,10 @@ MEANING AND STORY FIDELITY:
 
 NATURAL MYANMAR PROSE — NOT MACHINE-LIKE:
 - Write as a skilled Burmese web-novel editor, not a literal translation engine.
-- Replace awkward word-for-word constructions with natural Burmese expressions that preserve the same meaning.
+- Do not act as a conservative proofreader whose main goal is to leave the draft untouched. Actively edit the prose so the result reads as if it were originally written in Burmese.
+- Replace awkward word-for-word constructions, Chinese-influenced syntax, stiff MTL phrasing, unnatural collocations, repetitive sentence patterns, and misplaced particles with natural Burmese expressions that preserve the same meaning.
+- Meaning preservation protects the story, not the draft's wording. Do not confuse fidelity with literalness.
+- If the draft is already genuinely natural, do not change it just for the sake of changing it; otherwise, make the necessary editorial improvements rather than returning a lightly touched copy.
 - Prefer concise, familiar Burmese phrasing over unnecessarily long, stiff, bookish, or inflated expressions.
 - Remove redundant connectors, repeated words, unnatural pronouns, and filler only when doing so does not remove meaning.
 - Do not mechanically preserve source-language sentence structure.
