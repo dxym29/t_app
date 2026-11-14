@@ -274,6 +274,47 @@ app.get('/api/usage',(_,res)=>res.json(globalThis.getGeminiApiUsage?globalThis.g
 app.get('/api/novels',async(_,res)=>{try{res.json(await q(supabase.from('novels').select('*').order('created_at')))}catch(e){fail(res,e)}});
 app.post('/api/novels',async(req,res)=>{try{res.json(await q(supabase.from('novels').insert({name:req.body.name||'New Novel',style:req.body.style||''}).select().single()))}catch(e){fail(res,e)}});
 app.put('/api/novels/:id',async(req,res)=>{try{res.json(await q(supabase.from('novels').update({name:req.body.name,style:req.body.style,updated_at:new Date().toISOString()}).eq('id',req.params.id).select().single()))}catch(e){fail(res,e)}});
+app.post('/api/novels/:id/auto-style',async(req,res)=>{try{
+ const novel=await q(supabase.from('novels').select('id,name,style').eq('id',req.params.id).single());
+ if(String(novel.style||'').trim())return res.json({style:novel.style,generated:false,existing:true});
+ const episodes=await q(supabase.from('episodes').select('number,title,source').eq('novel_id',req.params.id).order('number').limit(3));
+ const samples=(episodes||[]).filter(x=>String(x.source||'').trim()).map(x=>'CHAPTER '+x.number+(x.title?' — '+x.title:'')+'\n'+String(x.source).slice(0,6500));
+ if(!samples.length)return res.status(400).json({error:'No source chapters are available to analyze for a novel style.'});
+ const prompt=`You are a professional literary-style analyst for a Myanmar webnovel translation system.
+
+Analyze the following ORIGINAL novel excerpts and create one concise, reusable NOVEL-LEVEL TRANSLATION STYLE PROFILE in Burmese.
+
+Identify only what is supported by the excerpts:
+- likely genre and subgenre
+- overall atmosphere and emotional tone
+- narration style and point of view
+- dialogue style, formality, honorifics and character voice
+- suitable Burmese literary register and sentence rhythm
+- how to handle titles, ranks, relationships, idioms and culturally specific terms
+- any genre-specific consistency rules
+
+IMPORTANT:
+- This is a style profile for translating future chapters into natural Myanmar prose, not a summary or translation.
+- Do not invent plot facts, character details, ranks, or terminology.
+- Do not assume every novel is cultivation or ancient Chinese fantasy. Determine the genre from the text.
+- Do not force archaic language if the source is modern; do not use modern slang if the source is historical.
+- Keep dialogue natural for each character's social status and relationship.
+- Preserve the source's tone rather than making every novel sound alike.
+- Write actionable instructions for both Phase 1 translation and Phase 2 Myanmar literary polishing.
+- Keep the profile compact (about 120–220 Burmese words), specific, and stable across chapters.
+- Return only the Burmese style profile. No heading, JSON, markdown, or explanation.
+
+NOVEL TITLE: ${novel.name||'Untitled novel'}
+
+SAMPLE EXCERPTS:
+${samples.join('\n\n===== NEXT CHAPTER SAMPLE =====\n\n')}`;
+ const result=await runTwoModelTask(aiTranslate,prompt,'STYLE_PROFILE');
+ const style=String(result.text||'').trim();
+ if(!style)throw new Error('AI returned an empty novel style profile.');
+ const saved=await q(supabase.from('novels').update({style,updated_at:new Date().toISOString()}).eq('id',req.params.id).select('style').single());
+ console.log('AUTO NOVEL STYLE generated for '+(novel.name||req.params.id)+' using '+result.model);
+ res.json({style:saved.style,generated:true,existing:false,model:result.model,sampleChapters:samples.length});
+}catch(e){fail(res,e)}});
 app.delete('/api/novels/:id',async(req,res)=>{try{await q(supabase.from('novels').delete().eq('id',req.params.id));res.json({ok:true})}catch(e){fail(res,e)}});
 app.get('/api/glossary/:novelId',async(req,res)=>{try{res.json(await getGlossary(req.params.novelId))}catch(e){fail(res,e)}});
 app.post('/api/glossary/:novelId',async(req,res)=>{try{res.json(await q(supabase.from('glossary_terms').upsert({novel_id:req.params.novelId,type:req.body.type,original:req.body.original,translation:req.body.translation,note:req.body.note||'',voice:req.body.voice||''},{onConflict:'novel_id,type,original'}).select().single()))}catch(e){fail(res,e)}});
