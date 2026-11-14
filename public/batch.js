@@ -109,7 +109,7 @@
         }
         $('translation').value=p1.translation;$('polishedTranslation').value='';currentEpisode.translation=p1.translation;updateStats();
         let finalText=p1.translation;
-        try{$('batchStatus').textContent=`${label} • Phase 2 Polish...`;const p2=await api('/api/polish',{method:'POST',body:JSON.stringify({novelId:currentNovel.id,episodeId:e.id,translation:p1.translation})});if(!String(p2.translation||'').trim())throw new Error('Polish returned empty output.');finalText=p2.translation;$('polishedTranslation').value=finalText;updateStats()}catch(polishError){
+        try{$('batchStatus').textContent=`${label} • Phase 2 Polish...`;const p2=await api('/api/polish',{method:'POST',body:JSON.stringify({novelId:currentNovel.id,episodeId:e.id,translation:p1.translation})});if(!String(p2.translation||'').trim())throw new Error('Polish returned empty output.');finalText=p2.translation;$('polishedTranslation').value=p2.polishFallback?'':finalText;if(p2.polishFallback||p2.validated===false){polishSkipped++;polishErrors.push('#'+e.number+': Pass 2 validation failed; Pass 1 preserved. '+(p2.validationWarnings||[]).join('; '));$('batchStatus').textContent=label+' • Pass 2 validation failed → Pass 1 preserved';}updateStats()}catch(polishError){
           polishSkipped++;polishErrors.push(`#${e.number}: ${polishError.message||'Polish failed'}`);
           finalText=p1.translation;$('polishedTranslation').value='';updateStats();
           $('batchStatus').textContent=`${label} • Phase 2 error → preserving Pass 1...`;
