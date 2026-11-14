@@ -193,46 +193,50 @@ FINAL SELF-CHECK:
 6. No story detail, name, relationship, action, or intention has been added, lost, or changed.
 7. All supplied NameLock tokens remain exactly unchanged.
 
-${forceEdit?'- This is a corrective editorial pass. Improve awkward phrasing, rhythm, particles, and vocabulary wherever safe. Correct every listed validation issue, but preserve exactly the same story information.\\\\n':''}
+${forceEdit?'- This is a corrective editorial pass. Improve awkward phrasing, rhythm, particles, and vocabulary wherever safe. Correct every listed validation issue, but preserve exactly the same story information.\n':''}
 Return ONLY the polished Myanmar text. No preface, labels, notes, or explanation.
 
 INPUT:
 ${source}`}
 
 function splitPolishText(text,maxChars=6000){
- const paragraphs=String(text||'').replace(/\\r/g,'').split(/\\n\\s*\\n/);
+ const paragraphs=String(text||'').replace(/\r/g,'').split(/\n\s*\n/);
  const chunks=[];let current='';
  const flush=()=>{if(current.trim())chunks.push(current.trim());current='';};
- const addUnit=(unit)=>{
-  const value=String(unit||'').trim();if(!value)return;
-  const candidate=current?current+'\\n\\n'+value:value;
-  if(candidate.length<=maxChars){current=candidate;return;}
+ for(const paragraph of paragraphs){
+  const value=paragraph.trim();if(!value)continue;
+  const candidate=current?current+'\n\n'+value:value;
+  if(candidate.length<=maxChars){current=candidate;continue;}
   flush();
-  if(value.length<=maxChars){current=value;return;}
+  if(value.length<=maxChars){current=value;continue;}
   const sentences=value.match(/[^။!?]+[။!?]?/g)||[value];
   let piece='';
   for(const sentence of sentences){
    const part=sentence.trim();if(!part)continue;
-   if((piece?piece+' '+part:part).length<=maxChars){piece=piece?piece+' '+part:part;continue;}
-   if(piece){current=piece;flush();piece='';}
-   if(part.length<=maxChars){piece=part;continue;}
-   let offset=0;
-   while(offset<part.length){
-    let end=Math.min(offset+maxChars,part.length);
-    const tokenStart=part.lastIndexOf('[[NAMELOCK_',end);
-    if(tokenStart>=offset&&tokenStart<end){
-     const tokenEnd=part.indexOf(']]',tokenStart);
-     if(tokenEnd>=end)end=tokenStart;
+   if(part.length>maxChars){
+    if(piece){current=piece;flush();piece='';}
+    let offset=0;
+    while(offset<part.length){
+     let end=Math.min(offset+maxChars,part.length);
+     const tokenStart=part.lastIndexOf('[[NAMELOCK_',end);
+     if(tokenStart>=offset&&tokenStart<end){
+      const tokenEnd=part.indexOf(']]',tokenStart);
+      if(tokenEnd>=end)end=tokenStart;
+     }
+     if(end<=offset)end=Math.min(offset+maxChars,part.length);
+     const fragment=part.slice(offset,end).trim();
+     if(fragment){current=fragment;flush();}
+     offset=end;
     }
-    if(end<=offset)end=Math.min(offset+maxChars,part.length);
-    const fragment=part.slice(offset,end).trim();
-    if(fragment){current=fragment;flush();}
-    offset=end;
+   }else if((piece?piece+' '+part:part).length<=maxChars){
+    piece=piece?piece+' '+part:part;
+   }else{
+    if(piece){current=piece;flush();}
+    piece=part;
    }
   }
   if(piece){current=piece;flush();}
- };
- for(const paragraph of paragraphs)addUnit(paragraph);
+ }
  flush();
  return chunks;
 }
