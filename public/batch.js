@@ -49,6 +49,17 @@
     const missingText=skippedMissing.length?`\n\nMissing chapters will be skipped automatically: ${skippedMissing.join(', ')}.`:'';
     if(!confirm(`Run ${chapters.length} available chapters: #${chapters[0].number}–#${chapters[chapters.length-1].number}?${missingText}\n\n1. English-to-English polish / cleanup\n2. Auto Glossary extraction + database add (names/entities only)\n3. English-to-Myanmar translation\n4. Myanmar-to-Myanmar polish / save Pass 1 if polish fails\n\nGlossary limits: max 30 through chapter 100; 25 additional through chapter 200; 70 total per novel. Existing/duplicate terms are skipped. dao → တာအို and cultivation → ကျင့်ကြံခြင်း are fixed global terms. Translation uses 10,000-character chunks when needed. Quota and PROHIBITED_CONTENT skip the chapter. Other translation errors retry the same model every 3 seconds until success, using the configured fallback sequence. Phase 2 errors are skipped and Pass 1 is saved. Empty source is skipped automatically.`))return;
     const btn=$('batchBtn');btn.disabled=true;await requestNotifications();$('batchStatus').textContent=`Starting batch • ${chapters.length} chapters${skippedMissing.length?` • ${skippedMissing.length} missing skipped`:''}`;
+    let autoStyleNotice='';
+    try{
+      $('batchStatus').textContent='Analyzing novel genre and translation style with AI...';
+      const styleResult=await api('/api/novels/'+encodeURIComponent(currentNovel.id)+'/auto-style',{method:'POST',body:JSON.stringify({})});
+      if(styleResult?.style){currentNovel.style=styleResult.style;autoStyleNotice=styleResult.generated?'AI novel style created and saved.':'Existing novel style retained.';}
+    }catch(styleError){
+      autoStyleNotice='Automatic style analysis unavailable; continuing with existing translation rules. '+String(styleError?.message||styleError);
+      console.warn(autoStyleNotice);
+    }
+    $('batchStatus').textContent=autoStyleNotice||`Starting batch • ${chapters.length} chapters${skippedMissing.length?` • ${skippedMissing.length} missing skipped`:''}`;
+
     let completed=0,skipped=skippedMissing.length,emptySkipped=0,polishSkipped=0;const skippedReasons=skippedMissing.map(n=>`#${n}: chapter not found`);const polishErrors=[];
     try{
       for(let i=0;i<chapters.length;i++){
