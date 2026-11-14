@@ -248,7 +248,7 @@ function validatePolishOutput(text,source,finishReasons=[]){
  if(!out)issues.push('empty output');
  const reasons=(finishReasons||[]).map(x=>String(x||'').toUpperCase());
  if(reasons.some(x=>['MAX_TOKENS','SAFETY','RECITATION'].includes(x)))issues.push('model finish reason: '+reasons.join(','));
- const foreign=(out.match(/[\p{Script=Latin}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Cyrillic}\p{Script=Arabic}\p{Script=Greek}\p{Script=Hebrew}\p{Script=Thai}\p{Script=Devanagari}]/gu)||[]).length;
+ const foreign=Array.from(out).filter(ch=>/\p{L}/u.test(ch)&&!/\p{Script=Myanmar}/u.test(ch)).length;
  if(foreign>0)issues.push('foreign-script characters: '+foreign+' (Myanmar-only output required)');
  const a=countChars(input),b=countChars(out);
  if(a>=600&&b<a*.55)issues.push('output too short: '+b+'/'+a+' characters');
