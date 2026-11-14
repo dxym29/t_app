@@ -34,7 +34,45 @@ function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
 async function generateModel(ai,prompt,model,jsonMode=false){const started=Date.now();console.log(`Trying model: ${model}`);const response=await ai.models.generateContent({model,contents:prompt,config:{temperature:jsonMode?0.2:0.7,maxOutputTokens:8192,automaticContinuation:false,...(jsonMode?{responseMimeType:'application/json'}:{}),httpOptions:{timeout:MODEL_TIMEOUT}}});const text=String(response.text||'');const candidates=response.candidates||[];const finishReasons=candidates.map(c=>c.finishReason||'unknown');const promptFeedback=response.promptFeedback?.blockReason||null;console.log(`SUCCESS: ${model} (${Date.now()-started}ms; outputChars=${text.length}; finishReason=${finishReasons.join(',')||'no-candidates'}${promptFeedback?'; blockReason='+promptFeedback:''})`);if(!text.trim())throw new Error(`Empty model output from ${model}; finishReason=${finishReasons.join(',')||'no-candidates'}${promptFeedback?'; blockReason='+promptFeedback:''}`);return {text,model,finishReasons,promptFeedback}}
 async function generateWithRetries(ai,prompt,model,jsonMode=false){let lastError;for(let attempt=0;attempt<=MAX_RETRIES_PER_MODEL;attempt++){try{return await generateModel(ai,prompt,model,jsonMode)}catch(e){lastError=e;if(!retryable(e)||attempt===MAX_RETRIES_PER_MODEL)throw e;console.log(`${model} failed (attempt ${attempt+1}/${MAX_RETRIES_PER_MODEL}). Retrying in 5s...`);await sleep(RETRY_DELAY)}}throw lastError}
 async function runTwoModelTask(ai,prompt,tag){const jsonMode=tag==='GLOSSARY';try{return await generateWithRetries(ai,prompt,MODELS[0],jsonMode)}catch(e){if(!retryable(e))throw e;console.log(`${tag}: 3.1 exhausted after 2 retries. Switching to 3.5.`);return await generateWithRetries(ai,prompt,MODELS[1],jsonMode)}}
-async function runPolishTask(prompt,tag){try{return await runTwoModelTask(aiPolish,prompt,tag)}catch(e){if(!retryable(e)||!aiPolishFallback)throw e;console.log(`${tag}: primary polish API exhausted. Switching to separate polish fallback API.`);return await generateWithRetries(aiPolishFallback,prompt,POLISH_FALLBACK_MODEL,false)}}
+function isPolishQuotaError(error){
+ const message=String(error?.message||error);
+ return /429|quota|RESOURCE_EXHAUSTED|rate.?limit|GenerateRequestsPerDayPerModel|GenerateContentRequestsPerDay|retry.?after/i.test(message);
+}
+async function generatePolishWithRetry(ai,prompt,model,tag){
+ let attempt=0;
+ while(true){
+  try{return await generateModel(ai,prompt,model,false)}
+  catch(error){
+   if(isPolishQuotaError(error))throw error;
+   attempt++;
+   console.warn(tag+': '+model+' non-quota error on attempt '+attempt+'; retrying same model in 3 seconds: '+String(error?.message||error));
+   await sleep(3000);
+  }
+ }
+}
+async function runPolishTask(prompt,tag){
+ const primaryModels=['gemini-3.1-flash-lite','gemini-3.5-flash-lite'];
+ let lastQuotaError=null;
+ for(const model of primaryModels){
+  try{return await generatePolishWithRetry(aiPolish,prompt,model,tag)}
+  catch(error){
+   if(!isPolishQuotaError(error))throw error;
+   lastQuotaError=error;
+   console.warn(tag+': '+model+' quota exceeded; immediately switching to the next polish model.');
+  }
+ }
+ if(aiPolishFallback){
+  try{
+   console.warn(tag+': both primary polish models are quota-exhausted; switching to the separate polish fallback API.');
+   return await generatePolishWithRetry(aiPolishFallback,prompt,POLISH_FALLBACK_MODEL,tag+'-FALLBACK');
+  }catch(error){
+   if(isPolishQuotaError(error))throw new Error('All configured polish API/model stages are quota-exhausted. '+String(error?.message||error));
+   throw error;
+  }
+ }
+ throw new Error('Both primary polish models are quota-exhausted and no separate polish fallback API is configured. '+String(lastQuotaError?.message||''));
+}
+
 function splitText(text,maxChars=TRANSLATE_CHUNK_SIZE){if(text.length<=maxChars)return [text];const paragraphs=text.split(/\n\s*\n/);const chunks=[];let current='';for(const p of paragraphs){const block=p.trim();if(!block)continue;const candidate=current?current+'\n\n'+block:block;if(candidate.length<=maxChars)current=candidate;else{if(current)chunks.push(current);if(block.length<=maxChars)current=block;else{for(let i=0;i<block.length;i+=maxChars)chunks.push(block.slice(i,i+maxChars));current=''}}}if(current)chunks.push(current);return chunks.filter(Boolean)}
 function buildNameLocks(g){const locks=[];let n=1;for(const [type,arr] of Object.entries(g||{}))for(const x of arr||[]){const original=String(x.original||'').trim(),translation=String(x.translation||'').trim();if(!original||!translation)continue;locks.push({type,original,translation,token:`[[NAMELOCK_${String(n++).padStart(3,'0')}]]`})}locks.sort((a,b)=>b.original.length-a.original.length);return locks}
 function filterGlossaryToSource(g,source){const text=String(source||'').toLocaleLowerCase();const out={};for(const [type,arr] of Object.entries(g||{}))out[type]=(arr||[]).filter(x=>{const original=String(x.original||'').trim();return original&&text.includes(original.toLocaleLowerCase())});return out}
@@ -86,50 +124,118 @@ JSON SHAPE:
 
 SOURCE:
 ${source}`}
-function polishPrompt(source,forceEdit=false){return `You are an expert Myanmar-language literary editor specializing in high-quality Burmese web novels.
+function polishPrompt(source,forceEdit=false,novelStyle='',previousContext=''){return \`You are a senior Myanmar literary editor specializing in natural, publication-quality Burmese web novels.
 
-YOUR ONLY TASK:
-Rewrite the supplied Myanmar draft into fluent, idiomatic, publication-quality Myanmar prose. This is an EDITING task, not translation, summarization, or adaptation.
+YOUR ROLE:
+Edit the supplied Myanmar draft as an experienced human Burmese novel editor would. This is a Myanmar-to-Myanmar literary editing task, not translation, summarization, rewriting of the plot, or creative adaptation.
 
-ABSOLUTE LANGUAGE POLICY — MYANMAR ONLY:
-- Output must be written entirely in natural Myanmar language using Myanmar script.
-- Do NOT leave English, Chinese, Japanese, Korean, or any other foreign-language words in the output.
-- Translate foreign words into natural Myanmar. Use the exact established Myanmar glossary equivalent for names, titles, techniques, places, organizations, items, and ranks.
-- If no established equivalent exists, express or transliterate it naturally in Myanmar script. Never keep Latin spelling or foreign-script spelling.
-- ZERO LATIN LETTERS ARE ALLOWED. Do not output English names, romanized names, acronyms, abbreviations, or English words even if they appear in the input. Convert every one into Myanmar script.
-- Do not use English labels, headings, abbreviations, explanations, or foreign-language text in parentheses.
-- Protected NameLock tokens are technical markers: copy only the tokens already supplied, exactly. Never invent a token.
-- Myanmar punctuation and necessary ordinary numerals may be retained; foreign-language words and foreign scripts may not.
+PRIORITY ORDER:
+1. Preserve the exact story meaning and every narrative detail.
+2. Make the Burmese natural, idiomatic, fluent, and pleasant to read.
+3. Improve rhythm, sentence flow, word choice, and character voice without changing the author's intent.
+4. Follow the novel's established style and glossary, provided below.
 
 MEANING AND STORY FIDELITY:
 - Preserve every fact, action, thought, emotion, relationship, description, reaction, and line of dialogue.
 - Never add, invent, remove, summarize, shorten, merge, or skip story information.
-- Keep exact event order, cause and effect, speaker identity, and character intent.
+- Keep the exact event order, cause and effect, speaker identity, character intent, and scene logic.
 - Do not reinterpret ambiguous details or add explanations.
-- Preserve established terminology using its Myanmar glossary forms.
+- Do not replace a specific foreign cultural item with an unrelated generic Burmese item merely to make the sentence sound familiar.
+- For unfamiliar cultural foods, objects, customs, or titles, use the established glossary form when available. If none exists, choose a clear, accurate Myanmar-script transliteration or a concise descriptive expression. Never invent meaningless word-for-word compound words.
 
-MYANMAR LITERARY QUALITY:
-- Use natural Myanmar sentence structure, correct particles, case markers, verb forms, and connective expressions.
-- Remove awkward word-for-word phrasing and unnatural machine-translation constructions.
-- Choose precise Myanmar vocabulary suited to the scene, genre, and emotional context.
-- Make narration smooth, coherent, and easy to read without becoming overly formal or archaic.
-- Make dialogue genuinely spoken and distinct for each character according to personality, relationship, status, and emotion.
-- Improve transitions and paragraph flow while preserving scene structure where practical.
-- Avoid repetitive phrasing, clumsy pronouns, inconsistent honorifics, and unnecessary filler.
-- Preserve emotional intensity without exaggerating or weakening it.
+NATURAL MYANMAR PROSE — NOT MACHINE-LIKE:
+- Write as a skilled Burmese web-novel editor, not as a literal translation engine.
+- Replace awkward word-for-word constructions with natural Burmese expressions that preserve the same meaning.
+- Prefer concise, familiar Burmese phrasing over unnecessarily long, stiff, bookish, or inflated expressions.
+- Remove redundant connectors, repeated words, unnatural pronouns, and filler only when doing so does not remove meaning.
+- Do not mechanically preserve source-language sentence structure.
+- Choose verbs and expressions that fit the actual action and context. Do not add decorative descriptions or intensify an action without evidence in the draft.
+- Narration should be smooth and literary but not archaic, pompous, or uniformly formal.
+- Dialogue should sound like real Burmese speech and reflect each speaker's personality, relationship, age/status, and emotion. Do not make every character speak in the same voice.
+
+SENTENCE ENDINGS AND RHYTHM:
+- Do NOT make every narration sentence end mechanically with “သည်”.
+- Vary sentence endings naturally according to grammar, narrative voice, and context. Use suitable forms such as “သည်”, “၏”, “တယ်”, “ပါ”, “ခဲ့သည်”, “လာသည်”, “ဖြစ်သည်”, or other natural Burmese constructions where appropriate.
+- The sentence-final literary “၏” may be used occasionally in narration when it sounds genuinely natural and fits the novel's tone. Do not force “၏” into every sentence, do not use it as a random replacement for “သည်”, and do not use it where it makes the grammar awkward.
+- Use “၏” correctly as a possessive/genitive marker when required by the sentence.
+- Keep dialogue endings natural to the speaker; do not impose formal narration endings on spoken dialogue.
+- Vary rhythm without making the prose inconsistent or artificially ornate.
+
+INNER THOUGHTS AND PUNCTUATION:
+- Never use asterisks (*) to mark inner thoughts or internal monologue.
+- When the supplied text clearly presents a character's inner thought, use single quotation marks ('...') for that thought.
+- Do not turn ordinary narration or spoken dialogue into inner thoughts. Preserve the distinction.
+- Preserve meaningful dialogue punctuation and paragraph breaks. Do not add decorative symbols.
+
+MYANMAR-ONLY OUTPUT:
+- Output must use Myanmar script for all language content.
+- Do not leave Latin/English, Chinese, Japanese, Korean, or other foreign-script words in the final text.
+- Use the exact Myanmar glossary equivalent for names, titles, techniques, places, organizations, items, and ranks when supplied.
+- If no established Myanmar equivalent exists, express or transliterate the term naturally in Myanmar script. Never keep Latin spelling or foreign-script spelling.
+- Do not output English labels, headings, explanations, or foreign-language text in parentheses.
+- Protected NameLock tokens are technical markers: copy only the tokens already present in the input chunk, exactly. Never invent, remove, duplicate, or alter them.
+- Myanmar punctuation and necessary ordinary numerals may be retained.
+
+NOVEL STYLE REFERENCE:
+\${novelStyleText}
+Treat this as guidance for voice and literary tone only. It must never override story fidelity, the Myanmar-only requirement, NameLock rules, or the glossary.
+
+PREVIOUS CHUNK CONTEXT — CONTINUITY ONLY:
+\${previousContextText}
+Use this only to maintain continuity of names, tone, and sentence flow. Do not repeat it or include it in the output.
 
 FINAL SELF-CHECK:
-1. Every sentence reads naturally in Myanmar.
-2. No foreign-language words or foreign-script phrases remain.
-3. No story detail has been added, lost, or changed.
-4. Names and terminology follow the Myanmar glossary.
-5. All supplied NameLock tokens remain unchanged.
+1. Every sentence sounds natural when read by a Burmese novel reader.
+2. Sentence endings are varied naturally; “သည်” is not repeated mechanically and “၏” is used only where it fits.
+3. No meaningless invented compound words or inaccurate cultural substitutions.
+4. Inner thoughts use single quotation marks, never asterisks.
+5. No foreign-script words remain.
+6. No story detail, name, relationship, action, or intention has been added, lost, or changed.
+7. All supplied NameLock tokens remain exactly unchanged.
 
-${forceEdit?'- This is a stronger second editorial pass. Improve awkward Myanmar phrasing, rhythm, particles, and vocabulary wherever safe. Do not return the input unchanged, but preserve exactly the same story information.\\n':''}
+\${forceEdit?'- This is a corrective editorial pass. Improve awkward phrasing, rhythm, particles, and vocabulary wherever safe. Correct every listed validation issue, but preserve exactly the same story information.\\\\n':''}
 Return ONLY the polished Myanmar text. No preface, labels, notes, or explanation.
 
 INPUT:
-${source}`}
+\${source}\`}
+
+function splitPolishText(text,maxChars=6000){
+ const paragraphs=String(text||'').replace(/\\r/g,'').split(/\\n\\s*\\n/);
+ const chunks=[];let current='';
+ const flush=()=>{if(current.trim())chunks.push(current.trim());current='';};
+ const addUnit=(unit)=>{
+  const value=String(unit||'').trim();if(!value)return;
+  const candidate=current?current+'\\n\\n'+value:value;
+  if(candidate.length<=maxChars){current=candidate;return;}
+  flush();
+  if(value.length<=maxChars){current=value;return;}
+  const sentences=value.match(/[^။!?]+[။!?]?/g)||[value];
+  let piece='';
+  for(const sentence of sentences){
+   const part=sentence.trim();if(!part)continue;
+   if((piece?piece+' '+part:part).length<=maxChars){piece=piece?piece+' '+part:part;continue;}
+   if(piece){current=piece;flush();piece='';}
+   if(part.length<=maxChars){piece=part;continue;}
+   let offset=0;
+   while(offset<part.length){
+    let end=Math.min(offset+maxChars,part.length);
+    const tokenStart=part.lastIndexOf('[[NAMELOCK_',end);
+    if(tokenStart>=offset&&tokenStart<end){
+     const tokenEnd=part.indexOf(']]',tokenStart);
+     if(tokenEnd>=end)end=tokenStart;
+    }
+    if(end<=offset)end=Math.min(offset+maxChars,part.length);
+    const fragment=part.slice(offset,end).trim();
+    if(fragment){current=fragment;flush();}
+    offset=end;
+   }
+  }
+  if(piece){current=piece;flush();}
+ };
+ for(const paragraph of paragraphs)addUnit(paragraph);
+ flush();
+ return chunks;
+}
 async function getGlossary(novelId){const rows=await q(supabase.from('glossary_terms').select('*').eq('novel_id',novelId).order('created_at'));const g={characters:[],items:[],locations:[],organizations:[],skills:[],other:[]};for(const r of rows)(g[r.type]??g.other).push(r);return g}
 function validateGlossaryObject(x){return x&&typeof x==='object'&&['characters','items','organizations','locations','skills','other'].every(k=>Array.isArray(x[k]))}
 function validateLockedOutput(text,locks,expectedCounts){for(const x of locks){const expected=expectedCounts.get(x.token);if(expected===undefined)continue;const actual=countToken(text,x.token);if(actual!==expected)return false}return true}
@@ -138,8 +244,7 @@ function validatePolishOutput(text,source,finishReasons=[]){
  if(!out)issues.push('empty output');
  const reasons=(finishReasons||[]).map(x=>String(x||'').toUpperCase());
  if(reasons.some(x=>['MAX_TOKENS','SAFETY','RECITATION'].includes(x)))issues.push('model finish reason: '+reasons.join(','));
- const foreign=(out.match(/[\\p{Script=Latin}\\p{Script=Han}\\p{Script=Hiragana}\\p{Script=Katakana}\\p{Script=Hangul}\\p{Script=Cyrillic}\\p{Script=Arabic}]/gu)||[]).length;
- // Strict final-stage gate: even one foreign-script character is not accepted.
+ const foreign=(out.match(/[\p{Script=Latin}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Cyrillic}\p{Script=Arabic}\p{Script=Greek}\p{Script=Hebrew}\p{Script=Thai}\p{Script=Devanagari}]/gu)||[]).length;
  if(foreign>0)issues.push('foreign-script characters: '+foreign+' (Myanmar-only output required)');
  const a=countChars(input),b=countChars(out);
  if(a>=600&&b<a*.55)issues.push('output too short: '+b+'/'+a+' characters');
@@ -147,10 +252,10 @@ function validatePolishOutput(text,source,finishReasons=[]){
  if(ip>=8&&op<Math.ceil(ip*.35))issues.push('paragraph count reduced: '+op+'/'+ip);
  return issues;
 }
-function polishValidationRetryPrompt(source,issues){
- const p=polishPrompt(source,true),anchor='Return ONLY the polished Myanmar text. No preface, labels, notes, or explanation.';
+function polishValidationRetryPrompt(source,issues,novelStyle='',previousContext=''){
+ const p=polishPrompt(source,true,novelStyle,previousContext),anchor='Return ONLY the polished Myanmar text. No preface, labels, notes, or explanation.';
  if(!p.includes(anchor))throw new Error('Could not construct Polish validation retry prompt.');
- return p.replace(anchor,'Fix these validation issues: '+issues.join('; ')+'. Re-read and polish the complete input without omitting any story detail. STRICT REQUIREMENT: every Latin/English word must be translated or transliterated into Myanmar script. ZERO Latin letters are allowed anywhere in the final output. Before responding, scan the entire output character by character and replace every foreign-script word.\\n'+anchor);
+ return p.replace(anchor,'Fix these validation issues: '+issues.join('; ')+'. Re-read and polish the complete input chunk without omitting any story detail. STRICT REQUIREMENT: every foreign-script word must be expressed in Myanmar script. Before responding, scan the entire output and correct all listed issues.\\n'+anchor);
 }
 
 app.get('/api/health',(_,res)=>res.json({ok:true}));
@@ -220,54 +325,62 @@ app.post('/api/auto-glossary',async(req,res)=>{try{const {novelId,chapterNo,sour
 app.post('/api/polish',async(req,res)=>{try{
  const {novelId,episodeId,translation}=req.body;
  if(!novelId||!translation?.trim())return res.status(400).json({error:'Novel and translation are required'});
+ const novel=await q(supabase.from('novels').select('style').eq('id',novelId).single());
  let episodeSource='';
  if(episodeId){const ep=await q(supabase.from('episodes').select('source').eq('id',episodeId).eq('novel_id',novelId).single());episodeSource=ep?.source||''}
  const allGlossary=await getGlossary(novelId),glossary=episodeSource?filterGlossaryToSource(allGlossary,episodeSource):allGlossary;
- // During Myanmar polishing, hard-lock character names only. Other terms are
- // supplied as a normal glossary so a single altered term cannot abort a chapter.
  const locks=buildNameLocks({characters:glossary.characters||[]});
- const locked=lockTranslationText(translation,locks),expected=new Map();
- for(const x of locks)expected.set(x.token,countToken(locked,x.token));
  const glossaryLines=[];
  for(const [type,arr] of Object.entries(glossary||{}))for(const item of arr||[]){
-   const original=String(item.original||'').trim(),translated=String(item.translation||'').trim();
-   if(original&&translated)glossaryLines.push(type+': '+original+' => '+translated);
+  const original=String(item.original||'').trim(),translated=String(item.translation||'').trim();
+  if(original&&translated)glossaryLines.push(type+': '+original+' => '+translated);
  }
- const glossaryNote='\\n\\nAUTHORITATIVE MYANMAR NAME / TERM GLOSSARY (use these exact Myanmar forms consistently):\\n'+(glossaryLines.join('\\n')||'(none)');
- const firstPrompt=polishPrompt(locked,false).replace('INPUT:',glossaryNote+'\\n\\nINPUT:');
- let r=await runPolishTask(firstPrompt,'POLISH'),raw=String(r.text||'').trim();
- let lockValid=validateLockedOutput(raw,locks,expected);
- let polished=lockValid?restoreNameLocks(raw,locks):'';
- let issues=lockValid?validatePolishOutput(polished,translation,r.finishReasons):['protected character-name token mismatch'];
- if(normalizeForCompare(polished||raw)===normalizeForCompare(translation)&&!issues.length)issues.push('output unchanged; no editing was performed');
- if(issues.length){
-  console.warn('POLISH validation requires one corrective pass: '+issues.join('; '));
-  const retryBase=polishValidationRetryPrompt(locked,issues);
-  const retryPrompt=retryBase.replace('INPUT:',glossaryNote+'\\n\\nINPUT:');
-  r=await runPolishTask(retryPrompt,'POLISH-VALIDATION-RETRY');
-  raw=String(r.text||'').trim();
-  lockValid=validateLockedOutput(raw,locks,expected);
-  if(lockValid){
-    polished=restoreNameLocks(raw,locks);
-    issues=validatePolishOutput(polished,translation,r.finishReasons);
-  }else{
-    issues=['protected character-name token mismatch after corrective pass'];
+ const glossaryNote='\n\nAUTHORITATIVE MYANMAR NAME / TERM GLOSSARY (use these exact Myanmar forms consistently):\n'+(glossaryLines.join('\n')||'(none)');
+ const novelStyle=String(novel?.style||'').trim();
+ const chunks=splitPolishText(translation,6000);
+ const polishedChunks=[];
+ for(let index=0;index<chunks.length;index++){
+  const chunk=chunks[index];
+  const locked=lockTranslationText(chunk,locks),expected=new Map();
+  for(const item of locks)expected.set(item.token,countToken(locked,item.token));
+  const previousContext=index>0?polishedChunks[index-1].slice(-700):'';
+  const prompt=polishPrompt(locked,false,novelStyle,previousContext).replace('INPUT:',glossaryNote+'\n\nINPUT:');
+  let result=await runPolishTask(prompt,'POLISH-CHUNK-'+(index+1)+'/'+chunks.length);
+  let raw=String(result.text||'').trim();
+  let lockValid=validateLockedOutput(raw,locks,expected);
+  let polished=lockValid?restoreNameLocks(raw,locks):'';
+  let issues=lockValid?validatePolishOutput(polished,chunk,result.finishReasons):['protected character-name token mismatch'];
+  if(normalizeForCompare(polished||raw)===normalizeForCompare(chunk)&&!issues.length)issues.push('output unchanged; no editing was performed');
+  if(issues.length){
+   console.warn('POLISH chunk '+(index+1)+' requires one corrective pass: '+issues.join('; '));
+   const retryBase=polishValidationRetryPrompt(locked,issues,novelStyle,previousContext);
+   const retryPrompt=retryBase.replace('INPUT:',glossaryNote+'\n\nINPUT:');
+   result=await runPolishTask(retryPrompt,'POLISH-CHUNK-RETRY-'+(index+1)+'/'+chunks.length);
+   raw=String(result.text||'').trim();
+   lockValid=validateLockedOutput(raw,locks,expected);
+   if(lockValid){polished=restoreNameLocks(raw,locks);issues=validatePolishOutput(polished,chunk,result.finishReasons)}
+   else issues=['protected character-name token mismatch after corrective pass'];
+   if(normalizeForCompare(polished||raw)===normalizeForCompare(chunk)&&!issues.length)issues.push('output unchanged after corrective pass');
   }
-  const hardIssues=issues.filter(x=>!x.startsWith('foreign-script characters:'));
-  const softIssues=issues.filter(x=>x.startsWith('foreign-script characters:'));
-  if(softIssues.length)hardIssues.push(...softIssues);
-  if(hardIssues.length){
-    // Never save a version with uncertain character names or incomplete output.
-    // Return the untouched Pass 1 translation as a successful safe fallback.
-    console.warn('POLISH: corrective pass still failed validation; preserving original Pass 1 translation: '+hardIssues.join('; '));
-    return res.json({translation,model:r.model,pass1Chars:countChars(translation),pass2Chars:countChars(translation),changed:false,validated:false,polishFallback:true,validationWarnings:hardIssues});
+  if(issues.length){
+   console.warn('POLISH failed validation for chunk '+(index+1)+'; preserving the complete Pass 1 translation: '+issues.join('; '));
+   return res.json({translation,model:result.model,pass1Chars:countChars(translation),pass2Chars:countChars(translation),changed:false,validated:false,polishFallback:true,validationWarnings:issues,failedChunk:index+1,totalChunks:chunks.length});
   }
-  if(softIssues.length)console.warn('POLISH: accepted output with minor foreign-script residue after corrective pass: '+softIssues.join('; '));
+  polishedChunks.push(polished);
  }
- const validationWarnings=issues.filter(x=>x.startsWith('foreign-script characters:'));
+ const polished=polishedChunks.join('\n\n').trim();
+ if(!polished){
+  return res.json({translation,model:'none',pass1Chars:countChars(translation),pass2Chars:countChars(translation),changed:false,validated:false,polishFallback:true,validationWarnings:['empty combined polish output']});
+ }
  if(episodeId)await q(supabase.from('episodes').update({translation:polished,updated_at:new Date().toISOString()}).eq('id',episodeId).eq('novel_id',novelId));
- res.json({translation:polished,model:r.model,pass1Chars:countChars(translation),pass2Chars:countChars(polished),changed:normalizeForCompare(polished)!==normalizeForCompare(translation),validated:true,polishFallback:false,validationWarnings});
-}catch(e){fail(res,e)}});
+ res.json({translation:polished,model:'gemini-3.1-flash-lite / gemini-3.5-flash-lite',pass1Chars:countChars(translation),pass2Chars:countChars(polished),changed:normalizeForCompare(polished)!==normalizeForCompare(translation),validated:true,polishFallback:false,validationWarnings:[],totalChunks:chunks.length});
+}catch(e){
+ console.error('POLISH: preserving Pass 1 after Pass 2 failure:',e?.stack||e?.message||e);
+ const original=String(req.body?.translation||'');
+ if(original.trim())return res.json({translation:original,model:'Pass 1 fallback',pass1Chars:countChars(original),pass2Chars:countChars(original),changed:false,validated:false,polishFallback:true,validationWarnings:[String(e?.message||e)]});
+ fail(res,e);
+}});
+
 function slugify(value){return String(value||'novel').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Za-z0-9]+/g,'-').replace(/^-+|-+$/g,'').toLowerCase()||'novel'}
 function excelValue(value){return value==null?'':String(value)}
 async function fetchExportRows(table, columns, novelId, orderColumn, batchSize=25){
