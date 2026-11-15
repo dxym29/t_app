@@ -168,7 +168,11 @@ NATURAL MYANMAR PROSE — NOT MACHINE-LIKE:
 SENTENCE ENDINGS AND RHYTHM:
 - Do NOT make every narration sentence end mechanically with “သည်”.
 - Vary sentence endings naturally according to grammar, narrative voice, and context. Suitable forms may include “သည်”, “၏”, “တယ်”, “ပါ”, “ခဲ့သည်”, “လာသည်”, “ဖြစ်သည်”, and other natural Burmese constructions.
-- Match the user's preferred literary house style: use “၏” fairly frequently in narration wherever the sentence structure and meaning make it natural. It should be a recognizable recurring feature of the prose, not a rare or exceptional ending.
+- STRICT CHAPTER-LEVEL MINIMUM: In the completed polished text of EVERY chapter, at least SIX complete narration sentences must end with “၏”.
+- You decide which sentences are the most grammatically and stylistically suitable for ending with “၏”; there are no fixed sentence positions. Select natural opportunities throughout the chapter while preserving the original meaning.
+- Count only a sentence whose final written character is “၏”. A possessive “၏” appearing inside a sentence does NOT count. Dialogue does NOT count toward the six-sentence minimum.
+- Treat six as a minimum, not a target ceiling. Do not force “၏” into an unsuitable sentence or damage Burmese grammar to meet the count; choose other suitable narration sentences instead.
+- If the chapter is supplied in multiple chunks, apply this requirement to the chapter as a whole: distribute suitable “၏” sentence endings across the chunks rather than treating each chunk as a separate chapter.
 - Do NOT put “၏” at the end of every sentence. Alternate naturally with “သည်”, “တယ်”, “ခဲ့သည်”, “လာသည်”, and other grammatically suitable forms. Never insert “၏” where it makes the sentence ungrammatical or awkward.
 - Use “၏” correctly both as a possessive/genitive marker and in natural literary sentence endings. Do not mechanically replace every “သည်” with “၏”.
 - Keep dialogue endings natural to the speaker; do not impose the narration's “၏” style on spoken dialogue.
@@ -199,7 +203,7 @@ Use this only to maintain continuity of names, tone, and sentence flow. Do not r
 
 FINAL SELF-CHECK:
 1. Every sentence sounds natural when read by a Burmese novel reader.
-2. “၏” appears regularly in narration in keeping with the requested literary style, but is not forced into every sentence and is never used against Burmese grammar.
+2. The completed chapter contains at least SIX narration sentences ending exactly with “၏”; count only sentence-final “၏”, not possessive markers or dialogue. Keep every use grammatical and natural.
 3. No fabricated Burmese words, meaningless compounds, literal calques, or unnatural AI-like expressions; use established Burmese vocabulary, a clear Burmese description, or accurate Myanmar-script transliteration where needed.
 4. Inner thoughts use single quotation marks, never asterisks.
 5. No foreign-script words remain.
