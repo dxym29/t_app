@@ -457,7 +457,20 @@ async function fetchExportRows(table, columns, novelId, orderColumn, batchSize=2
 async function buildTemplateWorkbook(novelId,fromChapter=null,toChapter=null){
   const novel=await q(supabase.from('novels').select('id,name,style').eq('id',novelId).single());
   const glossary=await fetchExportRows('glossary_terms','original,translation,type,note,voice',''+novelId,'created_at',100);
-  let episodes=(await q(supabase.from('episodes').select('number,title,source,translation').eq('novel_id',''+novelId))).sort((a,b)=>Number(a.number)-Number(b.number));\n  const from=Number(fromChapter),to=Number(toChapter);\n  if(Number.isInteger(from)&&from>0)episodes=episodes.filter(e=>Number(e.number)>=from);\n  if(Number.isInteger(to)&&to>0)episodes=episodes.filter(e=>Number(e.number)<=to);
+  let episodes=await fetchExportRows('episodes','number,title,source,translation',''+novelId,'number',100);
+  episodes.sort((a,b)=>Number(a.number)-Number(b.number));
+  const from=Number(fromChapter),to=Number(toChapter);
+  if(Number.isInteger(from)&&from>0)episodes=episodes.filter(e=>Number(e.number)>=from);
+  if(Number.isInteger(to)&&to>0)episodes=episodes.filter(e=>Number(e.number)<=to);
+  if(Number.isInteger(from)&&from>0&&Number.isInteger(to)&&to>=from){
+    const available=new Set(episodes.map(e=>Number(e.number)));
+    const missing=[];
+    for(let chapter=from;chapter<=to;chapter++)if(!available.has(chapter))missing.push(chapter);
+    if(missing.length){
+      const preview=missing.slice(0,30).join(', ')+(missing.length>30?' ... (+'+(missing.length-30)+' more)':'');
+      throw new Error('Excel export stopped: '+missing.length+' chapter record(s) are missing from the database in the selected range. Missing chapter(s): '+preview+'. No incomplete workbook was generated.');
+    }
+  }
   const wb=new ExcelJS.Workbook();
   wb.creator='Webnovel Translator';
   wb.created=new Date();
@@ -481,7 +494,7 @@ async function buildTemplateWorkbook(novelId,fromChapter=null,toChapter=null){
   ns.autoFilter='A1:B1';
   const cs=wb.addWorksheet('Chapters');
   cs.addRow(['chapterNo','title','sourceLanguage','sourceContent','translatedTitle','translatedContent','publishImmediately']);
-  for(const [index,e] of episodes.entries())cs.addRow([index+1,excelValue(e.title),'zh',excelValue(e.source),'',excelValue(e.translation),'FALSE']);
+  for(const e of episodes)cs.addRow([Number(e.number),excelValue(e.title),'zh',excelValue(e.source),'',excelValue(e.translation),'FALSE']);
   cs.columns=[{width:14},{width:28},{width:18},{width:72},{width:28},{width:72},{width:22}];
   cs.views=[{state:'frozen',ySplit:1}];
   cs.autoFilter='A1:G1';
@@ -498,7 +511,7 @@ async function buildTemplateWorkbook(novelId,fromChapter=null,toChapter=null){
   }
   return wb;
 }
-app.get('/api/export/template/:id',async(req,res)=>{try{const fromChapter=req.query.fromChapter??null,toChapter=req.query.toChapter??null;for(const v of [fromChapter,toChapter])if(v!==null&&(!/^\d+$/.test(String(v))||Number(v)<1))return res.status(400).json({error:'Chapter range must use positive whole numbers.'});if(fromChapter!==null&&toChapter!==null&&Number(fromChapter)>Number(toChapter))return res.status(400).json({error:'Starting chapter must not be greater than ending chapter.'});const wb=await buildTemplateWorkbook(req.params.id,fromChapter,toChapter);const buffer=await wb.xlsx.writeBuffer();const novel=await q(supabase.from('novels').select('name').eq('id',req.params.id).single());res.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');res.setHeader('Content-Disposition',`attachment; filename="${slugify(novel.name)}-mm-novel.xlsx"`);res.setHeader('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate');res.setHeader('Pragma','no-cache');res.setHeader('Expires','0');res.setHeader('X-Workbook-Export-Version','chapter-sequence-v2');res.send(Buffer.from(buffer))}catch(e){fail(res,e)}});
+app.get('/api/export/template/:id',async(req,res)=>{try{const fromChapter=req.query.fromChapter??null,toChapter=req.query.toChapter??null;for(const v of [fromChapter,toChapter])if(v!==null&&(!/^\d+$/.test(String(v))||Number(v)<1))return res.status(400).json({error:'Chapter range must use positive whole numbers.'});if(fromChapter!==null&&toChapter!==null&&Number(fromChapter)>Number(toChapter))return res.status(400).json({error:'Starting chapter must not be greater than ending chapter.'});const wb=await buildTemplateWorkbook(req.params.id,fromChapter,toChapter);const buffer=await wb.xlsx.writeBuffer();const novel=await q(supabase.from('novels').select('name').eq('id',req.params.id).single());res.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');res.setHeader('Content-Disposition',`attachment; filename="${slugify(novel.name)}-mm-novel.xlsx"`);res.setHeader('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate');res.setHeader('Pragma','no-cache');res.setHeader('Expires','0');res.setHeader('X-Workbook-Export-Version','chapter-pagination-v3');res.send(Buffer.from(buffer))}catch(e){fail(res,e)}});
 async function exportNovel(novelId){const novel=await q(supabase.from('novels').select('*').eq('id',novelId).single());const glossary=await q(supabase.from('glossary_terms').select('*').eq('novel_id',novelId));const episodes=await q(supabase.from('episodes').select('*').eq('novel_id',novelId).order('number'));return {version:2,exportedAt:new Date().toISOString(),novels:[novel],glossary,episodes}}
 app.get('/api/export/novel/:id',async(req,res)=>{try{res.setHeader('Content-Disposition','attachment; filename=novel-backup.json');res.json(await exportNovel(req.params.id))}catch(e){fail(res,e)}});
 app.get('/api/export/all',async(_,res)=>{try{const novels=await q(supabase.from('novels').select('*').order('created_at'));const glossary=await q(supabase.from('glossary_terms').select('*'));const episodes=await q(supabase.from('episodes').select('*').order('novel_id,number'));res.setHeader('Content-Disposition','attachment; filename=webnovel-backup.json');res.json({version:2,exportedAt:new Date().toISOString(),novels,glossary,episodes})}catch(e){fail(res,e)}});
