@@ -185,12 +185,12 @@ MYANMAR-ONLY OUTPUT:
 - Output must use Myanmar script for all language content.
 - Prefer natural Myanmar-script wording for ordinary foreign terms when appropriate, but do not force changes that damage meaning.
 - CHARACTER NAMES ARE IMMUTABLE: preserve every personal/character name exactly as it appears in the supplied input. Do not translate, transliterate, respell, normalize, shorten, expand, or otherwise edit a character name. This rule applies even when a name contains Latin or another script.
-- Preserve all names and their spelling consistently; do not introduce any NameLock placeholder or technical token.
+- Preserve all names and their spelling consistently; do not introduce any technical placeholder or token.
 - Myanmar punctuation and necessary ordinary numerals may be retained.
 
 NOVEL STYLE REFERENCE:
 ${novelStyle}
-Treat this as guidance for voice and literary tone only. It must never override story fidelity, Myanmar-only output, NameLock rules, or the glossary.
+Treat this as guidance for voice and literary tone only. It must never override story fidelity, exact character-name preservation, or the glossary.
 
 PREVIOUS CHUNK CONTEXT — CONTINUITY ONLY:
 ${previousContext}
@@ -202,7 +202,7 @@ FINAL SELF-CHECK:
 3. No fabricated Burmese words, meaningless compounds, literal calques, or unnatural AI-like expressions; use established Burmese vocabulary, a clear Burmese description, or accurate Myanmar-script transliteration where needed.
 4. Inner thoughts use single quotation marks, never asterisks.
 5. No story detail, name, relationship, action, or intention has been added, lost, or changed.
-6. No NameLock placeholder or technical token is added to the output.
+6. No technical placeholder or token is added to the output.
 
 ${forceEdit?'- This is a corrective editorial pass. Improve awkward phrasing, rhythm, particles, and vocabulary wherever safe. Correct every listed validation issue, but preserve exactly the same story information.\n':''}
 Return ONLY the polished Myanmar text. No preface, labels, notes, or explanation.
@@ -273,7 +273,7 @@ function polishValidationRetryPrompt(source,issues,novelStyle='',previousContext
   'Use the complete supplied input chunk as the source of truth. Preserve every story fact, event, action, thought, emotion, relationship, and dialogue meaning.',
   'Do not shorten, summarize, omit, or replace the chunk with a partial answer.',
   'Preserve every character name exactly as it appears in the input. Never translate, transliterate, respell, normalize, or otherwise edit a character name.',
-  'Do not add, remove, or alter NameLock placeholders; this workflow uses no NameLock tokens in Phase 2.',
+  'Do not insert technical placeholders or token markers into the story.',
   'For output-length or paragraph-count issues, restore missing content and paragraph structure from the supplied input. Never pad with invented wording.',
   'Re-check the complete output against the listed issue(s), but do not make “၏” counts or foreign-script presence a reason to rewrite the text.'
  ];
