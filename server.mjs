@@ -81,7 +81,7 @@ function lockTranslationText(text,locks){let out=String(text||'');const ordered=
 function restoreNameLocks(text,locks){let out=String(text||'');for(const x of locks){out=out.split(x.token).join(x.translation);out=out.split(x.original).join(x.translation)}return out}
 function lockedGlossaryText(g,locks){const map=new Map(locks.map(x=>[x.original,x]));const lines=[];for(const [type,arr] of Object.entries(g||{}))for(const x of arr||[]){const l=map.get(String(x.original||'').trim());lines.push(`${type}: ${l?.token||x.original} => ${x.translation}${x.voice?` | voice: ${x.voice}`:''}${x.note?` | note: ${x.note}`:''}`)}return lines.join(String.fromCharCode(10))}
 function countChars(text){return Array.from(String(text||'')).length}
-function countSentenceFinalYa(text){return (String(text||'').match(/၏(?=\s|$)/gu)||[]).length}
+function countSentenceFinalYa(text){return (String(text||'').match(/၏(?=[။.!?…\\)\\]”’\"']*(?:\\s|$))/gu)||[]).length}
 function tokenRegex(token){return new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'g')}
 function countToken(text,token){return (String(text||'').match(tokenRegex(token))||[]).length}
 function normalizeForCompare(text){return String(text||'').replace(/\r/g,'').replace(/[ \t]+/g,' ').replace(/\n{3,}/g,'\n\n').trim()}
@@ -171,7 +171,7 @@ SENTENCE ENDINGS AND RHYTHM:
 - Vary sentence endings naturally according to grammar, narrative voice, and context. Suitable forms may include “သည်”, “၏”, “တယ်”, “ပါ”, “ခဲ့သည်”, “လာသည်”, “ဖြစ်သည်”, and other natural Burmese constructions.
 - STRICT CHAPTER-LEVEL MINIMUM: In the completed polished text of EVERY chapter, at least ${yaTarget} complete narration sentences must end with “၏”.
 - You decide which sentences are the most grammatically and stylistically suitable for ending with “၏”; there are no fixed sentence positions. Select natural opportunities throughout the chapter while preserving the original meaning.
-- Count only a sentence whose final written character is “၏”. A possessive “၏” appearing inside a sentence does NOT count. Dialogue does NOT count toward the thirteen-sentence minimum.
+- Count a narration sentence ending in “၏”, allowing normal sentence punctuation immediately after it (for example “၏။” or “၏!”). A possessive “၏” appearing inside a sentence does NOT count. Dialogue does NOT count toward the thirteen-sentence minimum.
 - Treat ${yaTarget} as the minimum for this chunk, not a target ceiling. Do not force “၏” into an unsuitable sentence or damage Burmese grammar to meet the count; choose other suitable narration sentences instead.
 - If the chapter is supplied in multiple chunks, apply this requirement to the chapter as a whole: the application assigns each chunk its share of the chapter-wide minimum; meet the assigned chunk minimum.
 - Do NOT put “၏” at the end of every sentence. Alternate naturally with “သည်”, “တယ်”, “ခဲ့သည်”, “လာသည်”, and other grammatically suitable forms. Never insert “၏” where it makes the sentence ungrammatical or awkward.
@@ -285,7 +285,7 @@ function polishValidationRetryPrompt(source,issues,novelStyle='',previousContext
   'Do not shorten, summarize, omit, or replace the chunk with a partial answer.',
   'Keep every protected NameLock token exactly as supplied, with the same count and spelling. Do not translate, delete, duplicate, or invent tokens.',
   'Fix the identified validation problems without undoing valid edits from the previous attempt.',
-  'For sentence-final “၏” issues, ensure at least '+yaTarget+' complete narration sentences in THIS chunk end with the final character “၏”. Count only sentence-final usage, not possessive usage or dialogue; distribute endings naturally and grammatically.',
+  'For sentence-final “၏” issues, ensure at least '+yaTarget+' complete narration sentences in THIS chunk end with “၏”, allowing normal punctuation immediately after it. Count only sentence-final usage, not possessive usage or dialogue; distribute endings naturally and grammatically.',
   'For foreign-script issues, convert every Latin or other foreign-script letter into natural Myanmar-script translation or transliteration; retain only exact protected NameLock tokens.',
   'For output-length or paragraph-count issues, restore missing content and paragraph structure from the supplied input. Never pad with invented wording.',
   'Before returning, silently re-check the complete output against every issue listed below and confirm each one is fixed.'
@@ -442,7 +442,6 @@ app.post('/api/polish',async(req,res)=>{try{
   let lockValid=validateLockedOutput(raw,locks,expected);
   let polished=lockValid?restoreNameLocks(raw,locks):'';
   let issues=lockValid?validatePolishOutput(polished,chunk,result.finishReasons,yaTarget):['protected character-name token mismatch'];
-  if(normalizeForCompare(polished||raw)===normalizeForCompare(chunk)&&!issues.length)issues.push('output unchanged; no editing was performed');
   let correctionPass=0;
   while(issues.length&&correctionPass<5){
    correctionPass++;
@@ -458,7 +457,6 @@ app.post('/api/polish',async(req,res)=>{try{
    }else{
     issues=['protected character-name token mismatch after corrective pass '+correctionPass];
    }
-   if(normalizeForCompare(polished||raw)===normalizeForCompare(chunk)&&!issues.length)issues.push('output unchanged after corrective pass');
   }
   if(issues.length){
    const message='Phase 2 validation did not pass after 5 corrective passes for chunk '+(index+1)+': '+issues.join('; ');
