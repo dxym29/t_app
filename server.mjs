@@ -290,7 +290,7 @@ function polishValidationRetryPrompt(source,issues,novelStyle='',previousContext
   'For output-length or paragraph-count issues, restore missing content and paragraph structure from the supplied input. Never pad with invented wording.',
   'Before returning, silently re-check the complete output against every issue listed below and confirm each one is fixed.'
  ];
- return p.replace(anchor,'CORRECTIVE PASS — REQUIRED FIXES:\\n- '+rules.join('\\n- ')+'\\nVALIDATION ISSUES TO FIX: '+issues.join('; ')+'\\n'+anchor);
+ return p.replace(anchor,'CORRECTIVE PASS — REQUIRED FIXES:\n- '+rules.join('\n- ')+'\nVALIDATION ISSUES TO FIX: '+issues.join('; ')+'\n'+anchor);
 }
 
 app.get('/api/health',(_,res)=>res.json({ok:true}));
