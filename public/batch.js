@@ -132,15 +132,20 @@
         try{
           $('batchStatus').textContent=`${label} • Phase 2 Polish...`;
           const p2=await api('/api/polish',{method:'POST',body:JSON.stringify({novelId:currentNovel.id,episodeId:e.id,translation:p1.translation})});
-          if(p2.polishFallback===true&&p2.phase2Failed===true&&String(p2.translation||'').trim()){
+          if(p2.phase2OutputAccepted===true&&String(p2.translation||'').trim()){
+            finalText=p2.translation;
+            if(p2.validationWarnings?.length)console.warn(`#${e.number}: Phase 2 output accepted with non-blocking warnings:`,p2.validationWarnings);
+            $('polishedTranslation').value=finalText;
+            updateStats();
+          }else if(p2.polishFallback===true&&p2.phase2Failed===true&&String(p2.translation||'').trim()){
             finalText=p1.translation;
             polishSkipped++;
-            polishErrors.push(`#${e.number}: Phase 2 validation failed after 5 corrective passes; saved Phase 1 as fallback. ${p2.fallbackReason||''}`);
+            polishErrors.push(`#${e.number}: Phase 2 request returned the configured Phase 1 fallback. ${p2.fallbackReason||''}`);
             $('polishedTranslation').value='';
-            $('batchStatus').textContent=`${label} • Phase 2 failed after 5 corrections • saving Phase 1 fallback...`;
+            $('batchStatus').textContent=`${label} • Phase 2 fallback • saving Phase 1...`;
             updateStats();
           }else{
-            if(p2.validated===false||p2.polishFallback||!String(p2.translation||'').trim())throw new Error('Phase 2 did not return a validated final translation. '+(p2.validationWarnings||[]).join('; '));
+            if(p2.validated===false||p2.polishFallback||!String(p2.translation||'').trim())throw new Error('Phase 2 did not return an accepted final translation. '+(p2.validationWarnings||[]).join('; '));
             finalText=p2.translation;
             $('polishedTranslation').value=finalText;
             updateStats();
