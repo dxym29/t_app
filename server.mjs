@@ -432,20 +432,27 @@ app.post('/api/polish',async(req,res)=>{try{
   let polished=lockValid?restoreNameLocks(raw,locks):'';
   let issues=lockValid?validatePolishOutput(polished,chunk,result.finishReasons,yaTarget):['protected character-name token mismatch'];
   if(normalizeForCompare(polished||raw)===normalizeForCompare(chunk)&&!issues.length)issues.push('output unchanged; no editing was performed');
-  if(issues.length){
-   console.warn('POLISH chunk '+(index+1)+' requires one corrective pass: '+issues.join('; '));
+  let correctionPass=0;
+  while(issues.length&&correctionPass<5){
+   correctionPass++;
+   console.warn('POLISH chunk '+(index+1)+' corrective pass '+correctionPass+'/5: '+issues.join('; '));
    const retryBase=polishValidationRetryPrompt(locked,issues,novelStyle,previousContext,yaTarget);
    const retryPrompt=retryBase.replace('INPUT:',glossaryNote+'\n\nINPUT:');
-   result=await runPolishTask(retryPrompt,'POLISH-CHUNK-RETRY-'+(index+1)+'/'+chunks.length);
+   result=await runPolishTask(retryPrompt,'POLISH-CHUNK-RETRY-'+(index+1)+'-'+correctionPass+'/'+chunks.length);
    raw=String(result.text||'').trim();
    lockValid=validateLockedOutput(raw,locks,expected);
-   if(lockValid){polished=restoreNameLocks(raw,locks);issues=validatePolishOutput(polished,chunk,result.finishReasons,yaTarget)}
-   else issues=['protected character-name token mismatch after corrective pass'];
+   if(lockValid){
+    polished=restoreNameLocks(raw,locks);
+    issues=validatePolishOutput(polished,chunk,result.finishReasons,yaTarget);
+   }else{
+    issues=['protected character-name token mismatch after corrective pass '+correctionPass];
+   }
    if(normalizeForCompare(polished||raw)===normalizeForCompare(chunk)&&!issues.length)issues.push('output unchanged after corrective pass');
   }
   if(issues.length){
-   console.warn('POLISH failed validation for chunk '+(index+1)+'; preserving the complete Pass 1 translation: '+issues.join('; '));
-   return res.json({translation,model:result.model,pass1Chars:countChars(translation),pass2Chars:countChars(translation),changed:false,validated:false,polishFallback:true,validationWarnings:issues,failedChunk:index+1,totalChunks:chunks.length});
+   const message='Phase 2 validation did not pass after 5 corrective passes for chunk '+(index+1)+': '+issues.join('; ');
+   console.error(message);
+   const error=new Error(message);error.status=502;throw error;
   }
   polishedChunks.push(polished);
  }
@@ -456,10 +463,8 @@ app.post('/api/polish',async(req,res)=>{try{
  if(episodeId)await q(supabase.from('episodes').update({translation:polished,updated_at:new Date().toISOString()}).eq('id',episodeId).eq('novel_id',novelId));
  res.json({translation:polished,model:'gemini-3.1-flash-lite / gemini-3.5-flash-lite',pass1Chars:countChars(translation),pass2Chars:countChars(polished),changed:normalizeForCompare(polished)!==normalizeForCompare(translation),validated:true,polishFallback:false,validationWarnings:[],totalChunks:chunks.length});
 }catch(e){
- console.error('POLISH: preserving Pass 1 after Pass 2 failure:',e?.stack||e?.message||e);
- const original=String(req.body?.translation||'');
- if(original.trim())return res.json({translation:original,model:'Pass 1 fallback',pass1Chars:countChars(original),pass2Chars:countChars(original),changed:false,validated:false,polishFallback:true,validationWarnings:[String(e?.message||e)]});
- fail(res,e);
+ console.error('POLISH failed; Pass 1 will not be returned as a successful fallback:',e?.stack||e?.message||e);
+ res.status(e?.status||502).json({error:String(e?.message||e),validated:false,polishFallback:false,phase2Failed:true});
 }});
 
 function slugify(value){return String(value||'novel').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Za-z0-9]+/g,'-').replace(/^-+|-+$/g,'').toLowerCase()||'novel'}
