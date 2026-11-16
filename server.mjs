@@ -81,6 +81,7 @@ function lockTranslationText(text,locks){let out=String(text||'');const ordered=
 function restoreNameLocks(text,locks){let out=String(text||'');for(const x of locks){out=out.split(x.token).join(x.translation);out=out.split(x.original).join(x.translation)}return out}
 function lockedGlossaryText(g,locks){const map=new Map(locks.map(x=>[x.original,x]));const lines=[];for(const [type,arr] of Object.entries(g||{}))for(const x of arr||[]){const l=map.get(String(x.original||'').trim());lines.push(`${type}: ${l?.token||x.original} => ${x.translation}${x.voice?` | voice: ${x.voice}`:''}${x.note?` | note: ${x.note}`:''}`)}return lines.join(String.fromCharCode(10))}
 function countChars(text){return Array.from(String(text||'')).length}
+function countSentenceFinalYa(text){return (String(text||'').match(/၏(?=\\s|[။!?…]|$)/gu)||[]).length}
 function tokenRegex(token){return new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'g')}
 function countToken(text,token){return (String(text||'').match(tokenRegex(token))||[]).length}
 function normalizeForCompare(text){return String(text||'').replace(/\r/g,'').replace(/[ \t]+/g,' ').replace(/\n{3,}/g,'\n\n').trim()}
@@ -124,7 +125,7 @@ JSON SHAPE:
 
 SOURCE:
 ${source}`}
-function polishPrompt(source,forceEdit=false,novelStyle='',previousContext=''){return `You are a senior Myanmar literary editor specializing in natural, publication-quality Burmese web novels.
+function polishPrompt(source,forceEdit=false,novelStyle='',previousContext='',yaTarget=13){return `You are a senior Myanmar literary editor specializing in natural, publication-quality Burmese web novels.
 
 YOUR ROLE:
 Edit the supplied Myanmar draft as an experienced human Burmese novel editor would. This is Myanmar-to-Myanmar literary editing, not translation, summarization, plot rewriting, or creative adaptation.
@@ -168,11 +169,11 @@ NATURAL MYANMAR PROSE — NOT MACHINE-LIKE:
 SENTENCE ENDINGS AND RHYTHM:
 - Do NOT make every narration sentence end mechanically with “သည်”.
 - Vary sentence endings naturally according to grammar, narrative voice, and context. Suitable forms may include “သည်”, “၏”, “တယ်”, “ပါ”, “ခဲ့သည်”, “လာသည်”, “ဖြစ်သည်”, and other natural Burmese constructions.
-- STRICT CHAPTER-LEVEL MINIMUM: In the completed polished text of EVERY chapter, at least SIX complete narration sentences must end with “၏”.
+- STRICT CHAPTER-LEVEL MINIMUM: In the completed polished text of EVERY chapter, at least ${yaTarget} complete narration sentences must end with “၏”.
 - You decide which sentences are the most grammatically and stylistically suitable for ending with “၏”; there are no fixed sentence positions. Select natural opportunities throughout the chapter while preserving the original meaning.
 - Count only a sentence whose final written character is “၏”. A possessive “၏” appearing inside a sentence does NOT count. Dialogue does NOT count toward the six-sentence minimum.
-- Treat six as a minimum, not a target ceiling. Do not force “၏” into an unsuitable sentence or damage Burmese grammar to meet the count; choose other suitable narration sentences instead.
-- If the chapter is supplied in multiple chunks, apply this requirement to the chapter as a whole: distribute suitable “၏” sentence endings across the chunks rather than treating each chunk as a separate chapter.
+- Treat ${yaTarget} as the minimum for this chunk, not a target ceiling. Do not force “၏” into an unsuitable sentence or damage Burmese grammar to meet the count; choose other suitable narration sentences instead.
+- If the chapter is supplied in multiple chunks, apply this requirement to the chapter as a whole: the application assigns each chunk its share of the chapter-wide minimum; meet the assigned chunk minimum.
 - Do NOT put “၏” at the end of every sentence. Alternate naturally with “သည်”, “တယ်”, “ခဲ့သည်”, “လာသည်”, and other grammatically suitable forms. Never insert “၏” where it makes the sentence ungrammatical or awkward.
 - Use “၏” correctly both as a possessive/genitive marker and in natural literary sentence endings. Do not mechanically replace every “သည်” with “၏”.
 - Keep dialogue endings natural to the speaker; do not impose the narration's “၏” style on spoken dialogue.
@@ -203,7 +204,7 @@ Use this only to maintain continuity of names, tone, and sentence flow. Do not r
 
 FINAL SELF-CHECK:
 1. Every sentence sounds natural when read by a Burmese novel reader.
-2. The completed chapter contains at least SIX narration sentences ending exactly with “၏”; count only sentence-final “၏”, not possessive markers or dialogue. Keep every use grammatical and natural.
+2. The completed chapter contains at least ${yaTarget} narration sentences ending exactly with “၏”; count only sentence-final “၏”, not possessive markers or dialogue. Keep every use grammatical and natural.
 3. No fabricated Burmese words, meaningless compounds, literal calques, or unnatural AI-like expressions; use established Burmese vocabulary, a clear Burmese description, or accurate Myanmar-script transliteration where needed.
 4. Inner thoughts use single quotation marks, never asterisks.
 5. No foreign-script words remain.
@@ -260,9 +261,11 @@ function splitPolishText(text,maxChars=6000){
 async function getGlossary(novelId){const rows=await q(supabase.from('glossary_terms').select('*').eq('novel_id',novelId).order('created_at'));const g={characters:[],items:[],locations:[],organizations:[],skills:[],other:[]};for(const r of rows)(g[r.type]??g.other).push(r);return g}
 function validateGlossaryObject(x){return x&&typeof x==='object'&&['characters','items','organizations','locations','skills','other'].every(k=>Array.isArray(x[k]))}
 function validateLockedOutput(text,locks,expectedCounts){for(const x of locks){const expected=expectedCounts.get(x.token);if(expected===undefined)continue;const actual=countToken(text,x.token);if(actual!==expected)return false}return true}
-function validatePolishOutput(text,source,finishReasons=[]){
+function validatePolishOutput(text,source,finishReasons=[],yaTarget=13){
  const out=String(text||'').trim(),input=String(source||'').trim(),issues=[];
  if(!out)issues.push('empty output');
+ const yaCount=countSentenceFinalYa(out);
+ if(yaCount<yaTarget)issues.push('sentence-final “၏” count below minimum: '+yaCount+'/'+yaTarget);
  const reasons=(finishReasons||[]).map(x=>String(x||'').toUpperCase());
  if(reasons.some(x=>['MAX_TOKENS','SAFETY','RECITATION'].includes(x)))issues.push('model finish reason: '+reasons.join(','));
  const foreign=Array.from(out).filter(ch=>/\p{L}/u.test(ch)&&!/\p{Script=Myanmar}/u.test(ch)).length;
@@ -273,8 +276,8 @@ function validatePolishOutput(text,source,finishReasons=[]){
  if(ip>=8&&op<Math.ceil(ip*.35))issues.push('paragraph count reduced: '+op+'/'+ip);
  return issues;
 }
-function polishValidationRetryPrompt(source,issues,novelStyle='',previousContext=''){
- const p=polishPrompt(source,true,novelStyle,previousContext),anchor='Return ONLY the polished Myanmar text. No preface, labels, notes, or explanation.';
+function polishValidationRetryPrompt(source,issues,novelStyle='',previousContext='',yaTarget=13){
+ const p=polishPrompt(source,true,novelStyle,previousContext,yaTarget),anchor='Return ONLY the polished Myanmar text. No preface, labels, notes, or explanation.';
  if(!p.includes(anchor))throw new Error('Could not construct Polish validation retry prompt.');
  return p.replace(anchor,'Fix these validation issues: '+issues.join('; ')+'. Re-read and polish the complete input chunk without omitting any story detail. STRICT REQUIREMENT: every foreign-script word must be expressed in Myanmar script. Before responding, scan the entire output and correct all listed issues.\\n'+anchor);
 }
@@ -329,9 +332,24 @@ app.delete('/api/novels/:id',async(req,res)=>{try{await q(supabase.from('novels'
 app.get('/api/glossary/:novelId',async(req,res)=>{try{res.json(await getGlossary(req.params.novelId))}catch(e){fail(res,e)}});
 app.post('/api/glossary/:novelId',async(req,res)=>{try{res.json(await q(supabase.from('glossary_terms').upsert({novel_id:req.params.novelId,type:req.body.type,original:req.body.original,translation:req.body.translation,note:req.body.note||'',voice:req.body.voice||''},{onConflict:'novel_id,type,original'}).select().single()))}catch(e){fail(res,e)}});
 app.delete('/api/glossary/:novelId/:type/:id',async(req,res)=>{try{await q(supabase.from('glossary_terms').delete().eq('novel_id',req.params.novelId).eq('id',req.params.id));res.json({ok:true})}catch(e){fail(res,e)}});
-app.get('/api/episodes/:novelId/output-status',async(req,res)=>{try{const rows=await q(supabase.from('episodes').select('id,number,title,source,translation').eq('novel_id',req.params.novelId).order('number'));res.json(rows.map(e=>({id:e.id,number:e.number,title:e.title||'',raw:!!String(e.source||'').trim(),translation:!!String(e.translation||'').trim()})))}catch(e){fail(res,e)}});
+async function fetchEpisodeRows(novelId,columns,batchSize=200){
+ const rows=[];
+ for(let start=0;;start+=batchSize){
+  const page=await q(supabase.from('episodes').select(columns).eq('novel_id',novelId).order('number').range(start,start+batchSize-1));
+  rows.push(...page);
+  if(page.length<batchSize)break;
+ }
+ return rows;
+}
+app.get('/api/episodes/:novelId/summary',async(req,res)=>{try{
+ const rows=await fetchEpisodeRows(req.params.novelId,'source,translation');
+ const raw=rows.filter(e=>String(e.source||'').trim()).length;
+ const translated=rows.filter(e=>String(e.translation||'').trim()).length;
+ res.json({total:rows.length,raw,translated,untranslated:rows.filter(e=>String(e.source||'').trim()&&!String(e.translation||'').trim()).length});
+}catch(e){fail(res,e)}});
+app.get('/api/episodes/:novelId/output-status',async(req,res)=>{try{const rows=await fetchEpisodeRows(req.params.novelId,'id,number,title,source,translation');res.json(rows.map(e=>({id:e.id,number:e.number,title:e.title||'',raw:!!String(e.source||'').trim(),translation:!!String(e.translation||'').trim()})))}catch(e){fail(res,e)}});
 app.get('/api/episodes/:novelId',async(req,res)=>{try{res.json(await q(supabase.from('episodes').select('*').eq('novel_id',req.params.novelId).order('number')))}catch(e){fail(res,e)}});
-app.get('/api/episodes/:novelId/list',async(req,res)=>{try{res.json(await q(supabase.from('episodes').select('id,novel_id,number,title,status,model,updated_at').eq('novel_id',req.params.novelId).order('number')))}catch(e){fail(res,e)}});
+app.get('/api/episodes/:novelId/list',async(req,res)=>{try{const rows=await fetchEpisodeRows(req.params.novelId,'id,novel_id,number,title,status,model,updated_at,source,translation');res.json(rows.map(e=>({id:e.id,novel_id:e.novel_id,number:e.number,title:e.title||'',status:e.status||'draft',model:e.model||'',updated_at:e.updated_at||'',hasRaw:!!String(e.source||'').trim(),hasTranslation:!!String(e.translation||'').trim()})))}catch(e){fail(res,e)}});
 app.get('/api/episodes/:novelId/:id',async(req,res)=>{try{res.json(await q(supabase.from('episodes').select('*').eq('novel_id',req.params.novelId).eq('id',req.params.id).single()))}catch(e){fail(res,e)}});
 app.post('/api/episodes/:novelId',async(req,res)=>{try{res.json(await q(supabase.from('episodes').insert({novel_id:req.params.novelId,number:req.body.number,title:req.body.title||'',source:req.body.source||'',translation:req.body.translation||'',status:'draft'}).select().single()))}catch(e){fail(res,e)}});
 app.put('/api/episodes/:novelId/:id',async(req,res)=>{try{res.json(await q(supabase.from('episodes').update({number:req.body.number,title:req.body.title,source:req.body.source,translation:req.body.translation,status:req.body.status||'draft',updated_at:new Date().toISOString()}).eq('novel_id',req.params.novelId).eq('id',req.params.id).select().single()))}catch(e){fail(res,e)}});
@@ -401,26 +419,27 @@ app.post('/api/polish',async(req,res)=>{try{
  const novelStyle=String(novel?.style||'').trim();
  const chunks=splitPolishText(translation,6000);
  const polishedChunks=[];
+ const yaBase=Math.floor(13/chunks.length),yaRemainder=13%chunks.length;
  for(let index=0;index<chunks.length;index++){
-  const chunk=chunks[index];
+  const chunk=chunks[index],yaTarget=yaBase+(index<yaRemainder?1:0);
   const locked=lockTranslationText(chunk,locks),expected=new Map();
   for(const item of locks)expected.set(item.token,countToken(locked,item.token));
   const previousContext=index>0?polishedChunks[index-1].slice(-700):'';
-  const prompt=polishPrompt(locked,false,novelStyle,previousContext).replace('INPUT:',glossaryNote+'\n\nINPUT:');
+  const prompt=polishPrompt(locked,false,novelStyle,previousContext,yaTarget).replace('INPUT:',glossaryNote+'\n\nINPUT:');
   let result=await runPolishTask(prompt,'POLISH-CHUNK-'+(index+1)+'/'+chunks.length);
   let raw=String(result.text||'').trim();
   let lockValid=validateLockedOutput(raw,locks,expected);
   let polished=lockValid?restoreNameLocks(raw,locks):'';
-  let issues=lockValid?validatePolishOutput(polished,chunk,result.finishReasons):['protected character-name token mismatch'];
+  let issues=lockValid?validatePolishOutput(polished,chunk,result.finishReasons,yaTarget):['protected character-name token mismatch'];
   if(normalizeForCompare(polished||raw)===normalizeForCompare(chunk)&&!issues.length)issues.push('output unchanged; no editing was performed');
   if(issues.length){
    console.warn('POLISH chunk '+(index+1)+' requires one corrective pass: '+issues.join('; '));
-   const retryBase=polishValidationRetryPrompt(locked,issues,novelStyle,previousContext);
+   const retryBase=polishValidationRetryPrompt(locked,issues,novelStyle,previousContext,yaTarget);
    const retryPrompt=retryBase.replace('INPUT:',glossaryNote+'\n\nINPUT:');
    result=await runPolishTask(retryPrompt,'POLISH-CHUNK-RETRY-'+(index+1)+'/'+chunks.length);
    raw=String(result.text||'').trim();
    lockValid=validateLockedOutput(raw,locks,expected);
-   if(lockValid){polished=restoreNameLocks(raw,locks);issues=validatePolishOutput(polished,chunk,result.finishReasons)}
+   if(lockValid){polished=restoreNameLocks(raw,locks);issues=validatePolishOutput(polished,chunk,result.finishReasons,yaTarget)}
    else issues=['protected character-name token mismatch after corrective pass'];
    if(normalizeForCompare(polished||raw)===normalizeForCompare(chunk)&&!issues.length)issues.push('output unchanged after corrective pass');
   }
