@@ -171,7 +171,7 @@ SENTENCE ENDINGS AND RHYTHM:
 - Vary sentence endings naturally according to grammar, narrative voice, and context. Suitable forms may include “သည်”, “၏”, “တယ်”, “ပါ”, “ခဲ့သည်”, “လာသည်”, “ဖြစ်သည်”, and other natural Burmese constructions.
 - STRICT CHAPTER-LEVEL MINIMUM: In the completed polished text of EVERY chapter, at least ${yaTarget} complete narration sentences must end with “၏”.
 - You decide which sentences are the most grammatically and stylistically suitable for ending with “၏”; there are no fixed sentence positions. Select natural opportunities throughout the chapter while preserving the original meaning.
-- Count only a sentence whose final written character is “၏”. A possessive “၏” appearing inside a sentence does NOT count. Dialogue does NOT count toward the six-sentence minimum.
+- Count only a sentence whose final written character is “၏”. A possessive “၏” appearing inside a sentence does NOT count. Dialogue does NOT count toward the thirteen-sentence minimum.
 - Treat ${yaTarget} as the minimum for this chunk, not a target ceiling. Do not force “၏” into an unsuitable sentence or damage Burmese grammar to meet the count; choose other suitable narration sentences instead.
 - If the chapter is supplied in multiple chunks, apply this requirement to the chapter as a whole: the application assigns each chunk its share of the chapter-wide minimum; meet the assigned chunk minimum.
 - Do NOT put “၏” at the end of every sentence. Alternate naturally with “သည်”, “တယ်”, “ခဲ့သည်”, “လာသည်”, and other grammatically suitable forms. Never insert “၏” where it makes the sentence ungrammatical or awkward.
