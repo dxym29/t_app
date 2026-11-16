@@ -268,8 +268,11 @@ function validatePolishOutput(text,source,finishReasons=[],yaTarget=13){
  if(yaCount<yaTarget)issues.push('sentence-final “၏” count below minimum: '+yaCount+'/'+yaTarget);
  const reasons=(finishReasons||[]).map(x=>String(x||'').toUpperCase());
  if(reasons.some(x=>['MAX_TOKENS','SAFETY','RECITATION'].includes(x)))issues.push('model finish reason: '+reasons.join(','));
- const foreign=Array.from(out).filter(ch=>/\p{L}/u.test(ch)&&!/\p{Script=Myanmar}/u.test(ch)).length;
- if(foreign>0)issues.push('foreign-script characters: '+foreign+' (Myanmar-only output required)');
+ const foreignChars=Array.from(out).filter(ch=>/\p{L}/u.test(ch)&&!/\p{Script=Myanmar}/u.test(ch));
+ if(foreignChars.length){
+  const fragments=[...new Set((out.match(/[A-Za-z][A-Za-z0-9'’_-]*/g)||[]))].slice(0,20);
+  issues.push('foreign-script characters: '+foreignChars.length+' (Myanmar-only output required)'+(fragments.length?'; exact Latin fragments to convert: '+fragments.join(', '):''));
+ }
  const a=countChars(input),b=countChars(out);
  if(a>=600&&b<a*.55)issues.push('output too short: '+b+'/'+a+' characters');
  const ip=input.split(/\n\s*\n/).filter(x=>x.trim()).length,op=out.split(/\n\s*\n/).filter(x=>x.trim()).length;
