@@ -33,31 +33,40 @@
     if(!String(p1?.translation||'').trim())throw new Error('Phase 1 returned empty output; stopping this chapter rather than repeating the full-chapter request.');
     return p1;
   }
-  async function runBatch(){
+  async function runBatch(allUntranslated=false){
     if(!currentNovel)return alert('Select a novel first.');
     const list=await api(`/api/episodes/${currentNovel.id}/list`);
     const sorted=[...list].sort((a,b)=>Number(a.number)-Number(b.number));
-    const selectedNumber=Number(currentEpisode?.number);
-    const startRaw=$('batchStart').value.trim();
-    const start=startRaw?Number(startRaw):(Number.isFinite(selectedNumber)&&selectedNumber>0?selectedNumber+1:0);
-    const count=Number($('batchCount').value);
-    if(!Number.isInteger(start)||start<1)return alert('Enter a valid starting chapter number.');
-    if(!Number.isInteger(count)||count<1||count>500)return alert('Batch size must be between 1 and 500 chapters.');
-    const onlyUntranslated=$('batchMode')?.value==='untranslated';
+    const onlyUntranslated=allUntranslated||$('batchMode')?.value==='untranslated';
     const chapters=[],skippedMissing=[],skippedTranslated=[],skippedNoRaw=[];
-    for(let n=start;n<start+count;n++){
-      const e=sorted.find(x=>Number(x.number)===n);
-      if(!e){skippedMissing.push(n);continue}
-      if(onlyUntranslated&&e.hasTranslation){skippedTranslated.push(n);continue}
-      if(onlyUntranslated&&!e.hasRaw){skippedNoRaw.push(n);continue}
-      chapters.push(e);
+    let start=0,count=0;
+    if(allUntranslated){
+      for(const e of sorted){
+        if(e.hasTranslation)continue;
+        if(!e.hasRaw){skippedNoRaw.push(Number(e.number));continue}
+        chapters.push(e);
+      }
+    }else{
+      const selectedNumber=Number(currentEpisode?.number);
+      const startRaw=$('batchStart').value.trim();
+      start=startRaw?Number(startRaw):(Number.isFinite(selectedNumber)&&selectedNumber>0?selectedNumber+1:0);
+      count=Number($('batchCount').value);
+      if(!Number.isInteger(start)||start<1)return alert('Enter a valid starting chapter number.');
+      if(!Number.isInteger(count)||count<1||count>500)return alert('Batch size must be between 1 and 500 chapters.');
+      for(let n=start;n<start+count;n++){
+        const e=sorted.find(x=>Number(x.number)===n);
+        if(!e){skippedMissing.push(n);continue}
+        if(onlyUntranslated&&e.hasTranslation){skippedTranslated.push(n);continue}
+        if(onlyUntranslated&&!e.hasRaw){skippedNoRaw.push(n);continue}
+        chapters.push(e);
+      }
     }
-    if(!chapters.length){const msg=onlyUntranslated?'No untranslated chapters with Raw source were found in the selected range.':`Batch has no existing chapters in #${start}–#${start+count-1}.`;setStatus(msg,false);notify('Batch stopped',msg,'batch-stop');return}
-    const missingText=skippedMissing.length?`\n\nMissing chapter records: ${skippedMissing.join(', ')}.`:'';
-    const modeText=onlyUntranslated?'UNTRANSLATED-ONLY mode: chapters already translated will be left untouched.':'Current mode: run every existing chapter in the selected range.';
-    const noRawText=skippedNoRaw.length?`\nChapters without Raw source skipped: ${skippedNoRaw.join(', ')}.`:'';
-    if(!confirm(`Run ${chapters.length} ${onlyUntranslated?'untranslated ':''}chapters: #${chapters[0].number}–#${chapters[chapters.length-1].number}?\n${modeText}${missingText}${noRawText}\n\n1. English-to-English polish / cleanup\n2. Auto Glossary extraction + database add (names/entities only)\n3. English-to-Myanmar translation\n4. Myanmar-to-Myanmar polish / retry validation up to 5 corrective passes; if validation still fails after all 5, save the Phase 1 translation as a reported fallback\n\nGlossary limits: max 30 through chapter 100; 25 additional through chapter 200; 70 total per novel. Existing/duplicate terms are skipped. dao → တာအို and cultivation → ကျင့်ကြံခြင်း are fixed global terms. Translation uses 10,000-character chunks when needed. Quota and PROHIBITED_CONTENT skip the chapter. Other translation errors retry the same model every 3 seconds until success, using the configured fallback sequence. If Phase 2 validation still fails after 5 corrective passes, save Pass 1 as a fallback and report it; Phase 2 API/quota errors do not trigger this fallback. Empty source is skipped automatically.`))return;
-    const btn=$('batchBtn');btn.disabled=true;await requestNotifications();$('batchStatus').textContent=`Starting batch • ${chapters.length} chapters${skippedMissing.length?` • ${skippedMissing.length} missing skipped`:''}`;
+    if(!chapters.length){const msg=allUntranslated?'No untranslated chapters with Raw source were found in this novel.':(onlyUntranslated?'No untranslated chapters with Raw source were found in the selected range.':('Batch has no existing chapters in #'+start+'–#'+(start+count-1)+'.'));setStatus(msg,false);notify('Batch stopped',msg,'batch-stop');return}
+    const missingText=skippedMissing.length?'\n\nMissing chapter records: '+skippedMissing.join(', ')+'.':'';
+    const modeText=allUntranslated?'ALL-UNTRANSLATED mode: every chapter in this novel without a saved translation will be processed.':(onlyUntranslated?'UNTRANSLATED-ONLY mode: chapters already translated will be left untouched.':'Current mode: run every existing chapter in the selected range.');
+    const noRawText=skippedNoRaw.length?'\nChapters without Raw source skipped: '+skippedNoRaw.join(', ')+'.':'';
+    if(!confirm('Run '+chapters.length+' '+(onlyUntranslated?'untranslated ':'')+'chapters: #'+chapters[0].number+'–#'+chapters[chapters.length-1].number+(allUntranslated?' (entire novel)':'')+'?\n'+modeText+missingText+noRawText+'\n\n1. English-to-English polish / cleanup\n2. Auto Glossary extraction + database add (names/entities only)\n3. English-to-Myanmar translation\n4. Myanmar-to-Myanmar polish / retry validation up to 5 corrective passes; if validation still fails after all 5, save the Phase 1 translation as a reported fallback\n\nGlossary limits: max 30 through chapter 100; 25 additional through chapter 200; 70 total per novel. Existing/duplicate terms are skipped. dao → တာအို and cultivation → ကျင့်ကြံခြင်း are fixed global terms. Translation uses 10,000-character chunks when needed. Quota and PROHIBITED_CONTENT skip the chapter. Other translation errors retry the same model every 3 seconds until success, using the configured fallback sequence. If Phase 2 validation still fails after 5 corrective passes, save Pass 1 as a fallback and report it; Phase 2 API/quota errors do not trigger this fallback. Empty source is skipped automatically.'))return;
+    const btn=$('batchBtn');const allBtn=$('batchAllUntranslatedBtn');btn.disabled=true;if(allBtn)allBtn.disabled=true;await requestNotifications();$('batchStatus').textContent=`Starting batch • ${chapters.length} chapters${skippedMissing.length?` • ${skippedMissing.length} missing skipped`:''}`;
     let autoStyleNotice='';
     try{
       $('batchStatus').textContent='Analyzing novel genre and translation style with AI...';
@@ -167,7 +176,8 @@
       }
       await loadEpisodeSummary().catch(()=>{});
       const summary=`Batch complete • ${completed}/${chapters.length} saved${skipped?` • ${skipped} skipped`:''}${polishSkipped?` • ${polishSkipped} Pass 2 skipped`:''}`;$('batchStatus').textContent=summary;const detail=[...skippedReasons.slice(0,10),...polishErrors.slice(0,5)];setStatus(detail.length?`${summary}\n${detail.join(' | ')}`:summary,true);saveNotice(summary);notify('Batch completed ✓',`${summary}.`,'batch-complete');
-    }catch(e){$('batchStatus').textContent=`Batch stopped • ${completed}/${chapters.length} saved • ${skipped} skipped`;setStatus(e.message||'Batch stopped.',false)}finally{btn.disabled=false}
+    }catch(e){$('batchStatus').textContent=`Batch stopped • ${completed}/${chapters.length} saved • ${skipped} skipped`;setStatus(e.message||'Batch stopped.',false)}finally{btn.disabled=false;if(allBtn)allBtn.disabled=false}
   }
-  $('batchBtn').onclick=()=>runBatch().catch(e=>{$('batchStatus').textContent='Batch stopped.';setStatus(e.message||'Batch stopped.',false);$('batchBtn').disabled=false});
+  $('batchBtn').onclick=()=>runBatch(false).catch(e=>{$('batchStatus').textContent='Batch stopped.';setStatus(e.message||'Batch stopped.',false);$('batchBtn').disabled=false});
+  if($('batchAllUntranslatedBtn'))$('batchAllUntranslatedBtn').onclick=()=>runBatch(true).catch(e=>{$('batchStatus').textContent='Batch stopped.';setStatus(e.message||'Batch stopped.',false);$('batchBtn').disabled=false;$('batchAllUntranslatedBtn').disabled=false});
 })();
