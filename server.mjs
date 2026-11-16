@@ -81,7 +81,7 @@ function lockTranslationText(text,locks){let out=String(text||'');const ordered=
 function restoreNameLocks(text,locks){let out=String(text||'');for(const x of locks){out=out.split(x.token).join(x.translation);out=out.split(x.original).join(x.translation)}return out}
 function lockedGlossaryText(g,locks){const map=new Map(locks.map(x=>[x.original,x]));const lines=[];for(const [type,arr] of Object.entries(g||{}))for(const x of arr||[]){const l=map.get(String(x.original||'').trim());lines.push(`${type}: ${l?.token||x.original} => ${x.translation}${x.voice?` | voice: ${x.voice}`:''}${x.note?` | note: ${x.note}`:''}`)}return lines.join(String.fromCharCode(10))}
 function countChars(text){return Array.from(String(text||'')).length}
-function countSentenceFinalYa(text){return (String(text||'').match(/၏(?=[။.!?…]|$)/gu)||[]).length}
+function countSentenceFinalYa(text){return (String(text||'').match(/၏[ \\t]*(?=[။.!?…]|(?:\\r?\\n)|$)/gu)||[]).length}
 function tokenRegex(token){return new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'g')}
 function countToken(text,token){return (String(text||'').match(tokenRegex(token))||[]).length}
 function normalizeForCompare(text){return String(text||'').replace(/\r/g,'').replace(/[ \t]+/g,' ').replace(/\n{3,}/g,'\n\n').trim()}
@@ -125,7 +125,7 @@ JSON SHAPE:
 
 SOURCE:
 ${source}`}
-function polishPrompt(source,forceEdit=false,novelStyle='',previousContext=''){return `You are a senior Myanmar literary editor specializing in natural, publication-quality Burmese web novels.
+function polishPrompt(source,forceEdit=false,novelStyle='',previousContext='',yaTarget=0){return `You are a senior Myanmar literary editor specializing in natural, publication-quality Burmese web novels.
 
 YOUR ROLE:
 Edit the supplied Myanmar draft as an experienced human Burmese novel editor would. This is Myanmar-to-Myanmar literary editing, not translation, summarization, plot rewriting, or creative adaptation.
@@ -169,9 +169,10 @@ NATURAL MYANMAR PROSE — NOT MACHINE-LIKE:
 SENTENCE ENDINGS AND RHYTHM:
 - Do NOT make every narration sentence end mechanically with “သည်”.
 - Vary sentence endings naturally according to grammar, narrative voice, and context. Suitable forms may include “သည်”, “၏”, “တယ်”, “ပါ”, “ခဲ့သည်”, “လာသည်”, “ဖြစ်သည်”, and other natural Burmese constructions.
-- Use “၏” naturally and correctly where Burmese grammar and literary style call for it. Do not force a minimum count or alter meaning just to increase its frequency.
-- Do NOT put “၏” at the end of every sentence. Alternate naturally with “သည်”, “တယ်”, “ခဲ့သည်”, “လာသည်”, and other grammatically suitable forms. Never insert “၏” where it makes the sentence ungrammatical or awkward.
-- Use “၏” correctly both as a possessive/genitive marker and in natural literary sentence endings. Do not mechanically replace every “သည်” with “၏”.
+- Use “၏” naturally and correctly in narration sentence endings where Burmese grammar permits it; never use it ungrammatically or mechanically replace every “သည်” with “၏”.
+- CHAPTER-LEVEL VALIDATION REQUIREMENT: This chapter must contain at least 13 narration sentences ending with “၏”. This chunk's assigned minimum is ${yaTarget}. Meet the assigned minimum with grammatical narration sentences; dialogue and possessive “၏” inside a sentence do not count.
+- Count a sentence-final “၏” when it is followed by Myanmar/English sentence punctuation, a line break, or the end of the chunk. Do not treat a possessive marker followed by more words as sentence-final.
+- Keep sentence endings varied and natural while meeting the assigned minimum; do not put “၏” at the end of every sentence.
 - Keep dialogue endings natural to the speaker; do not impose the narration's “၏” style on spoken dialogue.
 - Vary rhythm while maintaining a consistent Myanmar literary voice.
 
@@ -182,7 +183,8 @@ INNER THOUGHTS AND PUNCTUATION:
 - Preserve meaningful dialogue punctuation and paragraph breaks. Do not add decorative symbols.
 
 MYANMAR-ONLY OUTPUT:
-- Output must use Myanmar script for all language content.
+- Output must use Myanmar script for all language content. Convert every foreign-language word or phrase into accurate, natural Myanmar-script wording or transliteration.
+- Do not leave Latin, Chinese, Japanese, Korean, or other non-Myanmar script in the output, except an exact character name that is already written in that script in the input. Preserve such character names exactly.
 - Prefer natural Myanmar-script wording for ordinary foreign terms when appropriate, but do not force changes that damage meaning.
 - CHARACTER NAMES ARE IMMUTABLE: preserve every personal/character name exactly as it appears in the supplied input. Do not translate, transliterate, respell, normalize, shorten, expand, or otherwise edit a character name. This rule applies even when a name contains Latin or another script.
 - Preserve all names and their spelling consistently; do not introduce any technical placeholder or token.
@@ -201,8 +203,10 @@ FINAL SELF-CHECK:
 2. Every character name is preserved exactly as it appears in the input.
 3. No fabricated Burmese words, meaningless compounds, literal calques, or unnatural AI-like expressions; use established Burmese vocabulary, a clear Burmese description, or accurate Myanmar-script transliteration where needed.
 4. Inner thoughts use single quotation marks, never asterisks.
-5. No story detail, name, relationship, action, or intention has been added, lost, or changed.
-6. No technical placeholder or token is added to the output.
+5. The chunk contains at least ${yaTarget} narration sentences ending with sentence-final “၏”.
+6. No foreign-script words remain, except exact character names preserved from the input.
+7. No story detail, name, relationship, action, or intention has been added, lost, or changed.
+8. No technical placeholder or token is added to the output.
 
 ${forceEdit?'- This is a corrective editorial pass. Improve awkward phrasing, rhythm, particles, and vocabulary wherever safe. Correct every listed validation issue, but preserve exactly the same story information.\n':''}
 Return ONLY the polished Myanmar text. No preface, labels, notes, or explanation.
@@ -254,30 +258,52 @@ function splitPolishText(text,maxChars=6000){
 async function getGlossary(novelId){const rows=await q(supabase.from('glossary_terms').select('*').eq('novel_id',novelId).order('created_at'));const g={characters:[],items:[],locations:[],organizations:[],skills:[],other:[]};for(const r of rows)(g[r.type]??g.other).push(r);return g}
 function validateGlossaryObject(x){return x&&typeof x==='object'&&['characters','items','organizations','locations','skills','other'].every(k=>Array.isArray(x[k]))}
 function validateLockedOutput(text,locks,expectedCounts){for(const x of locks){const expected=expectedCounts.get(x.token);if(expected===undefined)continue;const actual=countToken(text,x.token);if(actual!==expected)return false}return true}
-function validatePolishOutput(text,source,finishReasons=[]){
+function maskExactTerms(text,terms=[]){
+ let out=String(text||'');
+ for(const term of [...new Set((terms||[]).map(x=>String(x||'').trim()).filter(Boolean))].sort((a,b)=>b.length-a.length))out=out.split(term).join(' '.repeat(term.length));
+ return out;
+}
+function getForeignScriptFragments(text,allowedNames=[]){
+ const masked=maskExactTerms(text,allowedNames),matches=[];
+ for(const match of masked.matchAll(/[\\p{L}\\p{M}]+/gu)){
+  const token=match[0];
+  if(/[\\p{L}]/u.test(token)&&!/[\\p{Script=Myanmar}]/u.test(token))matches.push(token);
+ }
+ return [...new Set(matches)].slice(0,30);
+}
+function validatePolishOutput(text,source,finishReasons=[],options={}){
  const out=String(text||'').trim(),input=String(source||'').trim(),issues=[];
  if(!out)issues.push('empty output');
  const reasons=(finishReasons||[]).map(x=>String(x||'').toUpperCase());
  if(reasons.some(x=>['MAX_TOKENS','SAFETY','RECITATION'].includes(x)))issues.push('model finish reason: '+reasons.join(','));
  const a=countChars(input),b=countChars(out);
  if(a>=600&&b<a*.55)issues.push('output too short: '+b+'/'+a+' characters');
- const ip=input.split(/\n\s*\n/).filter(x=>x.trim()).length,op=out.split(/\n\s*\n/).filter(x=>x.trim()).length;
+ const ip=input.split(/\\n\\s*\\n/).filter(x=>x.trim()).length,op=out.split(/\\n\\s*\\n/).filter(x=>x.trim()).length;
  if(ip>=8&&op<Math.ceil(ip*.35))issues.push('paragraph count reduced: '+op+'/'+ip);
+ const yaTarget=Math.max(0,Number(options.yaTarget)||0),yaCount=countSentenceFinalYa(out);
+ if(yaCount<yaTarget)issues.push('sentence-final “၏” count below minimum: '+yaCount+'/'+yaTarget+'; add grammatical narration sentence endings with “၏”, not possessive markers or dialogue');
+ const foreign=getForeignScriptFragments(out,options.allowedNames||[]);
+ if(foreign.length)issues.push('foreign-script words remain: '+foreign.join(', ')+'; convert these to Myanmar script, but preserve exact character names');
+ const asterisks=(out.match(/\\*/g)||[]).length;
+ if(asterisks)issues.push('asterisk thought/formatting markers remain: '+asterisks+'; replace inner-thought *...* markers with single quotation marks and remove all asterisks');
  return issues;
 }
-function polishValidationRetryPrompt(source,issues,novelStyle='',previousContext=''){
- const p=polishPrompt(source,true,novelStyle,previousContext),anchor='Return ONLY the polished Myanmar text. No preface, labels, notes, or explanation.';
+function polishValidationRetryPrompt(currentDraft,issues,novelStyle='',previousContext='',originalSource='',yaTarget=0){
+ const source=String(originalSource||currentDraft||''),draft=String(currentDraft||'');
+ const p=polishPrompt(source,true,novelStyle,previousContext,yaTarget),anchor='Return ONLY the polished Myanmar text. No preface, labels, notes, or explanation.';
  if(!p.includes(anchor))throw new Error('Could not construct Polish validation retry prompt.');
  const rules=[
-  'This is a targeted corrective editing pass. Fix the listed issue(s) only, while preserving all valid edits and the complete story.',
-  'Use the complete supplied input chunk as the source of truth. Preserve every story fact, event, action, thought, emotion, relationship, and dialogue meaning.',
-  'Do not shorten, summarize, omit, or replace the chunk with a partial answer.',
-  'Preserve every character name exactly as it appears in the input. Never translate, transliterate, respell, normalize, or otherwise edit a character name.',
-  'Do not insert technical placeholders or token markers into the story.',
-  'For output-length or paragraph-count issues, restore missing content and paragraph structure from the supplied input. Never pad with invented wording.',
-  'Re-check the complete output against the listed issue(s), but do not make “၏” counts or foreign-script presence a reason to rewrite the text.'
+  'This is corrective pass editing. The CURRENT PHASE 2 DRAFT below is the text to repair; use the ORIGINAL INPUT as the source of truth for any omitted story information.',
+  'Fix every listed validation issue in this pass. Do not merely explain the issue or repeat the unchanged draft.',
+  'Keep all valid literary edits from the current draft. Preserve every story fact, event, action, thought, emotion, relationship, and dialogue meaning.',
+  'Preserve every character name exactly as it appears in the original input. Never translate, transliterate, respell, normalize, or otherwise edit a character name.',
+  'Meet the assigned sentence-final “၏” minimum with grammatical narration sentences. Do not count possessive markers or dialogue.',
+  'Convert all foreign-language words to Myanmar script, except exact character names preserved from the original input.',
+  'Replace every asterisk used for inner thoughts with single quotation marks. Do not use * as a thought marker or formatting symbol.',
+  'Do not shorten, summarize, omit, or replace the chunk with a partial answer. Return the complete corrected chunk.'
  ];
- return p.replace(anchor,'CORRECTIVE PASS — REQUIRED FIXES:\\n- '+rules.join('\\n- ')+'\\nVALIDATION ISSUES TO FIX: '+issues.join('; ')+'\\n'+anchor);
+ const corrective='CORRECTIVE PASS — REQUIRED FIXES:\\n- '+rules.join('\\n- ')+'\\nVALIDATION ISSUES TO FIX: '+issues.join('; ')+'\\n\\nCURRENT PHASE 2 DRAFT TO CORRECT (preserve its valid edits):\\n'+draft+'\\n\\nORIGINAL INPUT (story-fidelity reference):\\n'+source+'\\n';
+ return p.replace(anchor,corrective+anchor);
 }
 
 app.get('/api/health',(_,res)=>res.json({ok:true}));
@@ -441,28 +467,30 @@ app.post('/api/polish',async(req,res)=>{try{
   if(original&&translated)glossaryLines.push(type+': '+original+' => '+translated);
  }
  const glossaryNote='\\n\\nAUTHORITATIVE NAME / TERM GLOSSARY (reference for consistency only; never alter character names already present in the input):\\n'+(glossaryLines.join('\\n')||'(none)');
+ const allowedNames=(glossary?.characters||[]).flatMap(x=>[x.original,x.translation]).map(x=>String(x||'').trim()).filter(Boolean);
  const novelStyle=String(novel?.style||'').trim(),chunks=splitPolishText(translation,6000),polishedChunks=[];
+ const baseYa=Math.floor(13/chunks.length),extraYa=13%chunks.length;
  for(let index=0;index<chunks.length;index++){
-  const chunk=chunks[index],previousContext=index>0?polishedChunks[index-1].slice(-700):'';
-  const prompt=polishPrompt(chunk,false,novelStyle,previousContext).replace('INPUT:',glossaryNote+'\\n\\nINPUT:');
+  const chunk=chunks[index],previousContext=index>0?polishedChunks[index-1].slice(-700):'',yaTarget=baseYa+(index<extraYa?1:0);
+  const prompt=polishPrompt(chunk,false,novelStyle,previousContext,yaTarget).replace('INPUT:',glossaryNote+'\\n\\nINPUT:');
   let result=await runPolishTask(prompt,'POLISH-CHUNK-'+(index+1)+'/'+chunks.length),polished=String(result.text||'').trim();
   if(!polished)throw new Error('Phase 2 returned an empty result for chunk '+(index+1)+'.');
-  let issues=validatePolishOutput(polished,chunk,result.finishReasons),correctionPass=0;
+  let issues=validatePolishOutput(polished,chunk,result.finishReasons,{yaTarget,allowedNames}),correctionPass=0;
   while(issues.length&&correctionPass<2){
    correctionPass++;
    console.warn('POLISH chunk '+(index+1)+' corrective pass '+correctionPass+'/2: '+issues.join('; '));
-   const retryBase=polishValidationRetryPrompt(polished,issues,novelStyle,previousContext);
+   const retryBase=polishValidationRetryPrompt(polished,issues,novelStyle,previousContext,chunk,yaTarget);
    const retryPrompt=retryBase.replace('INPUT:',glossaryNote+'\\n\\nINPUT:');
    result=await runPolishTask(retryPrompt,'POLISH-CHUNK-RETRY-'+(index+1)+'-'+correctionPass+'/'+chunks.length);
    const next=String(result.text||'').trim();if(next)polished=next;
-   issues=validatePolishOutput(polished,chunk,result.finishReasons);
+   issues=validatePolishOutput(polished,chunk,result.finishReasons,{yaTarget,allowedNames});
   }
   if(issues.length)console.warn('POLISH chunk '+(index+1)+' still has warnings after 2 corrective passes; accepting latest Phase 2 output: '+issues.join('; '));
   polishedChunks.push(polished);
  }
  const polished=polishedChunks.join('\\n\\n').trim();if(!polished)throw new Error('Phase 2 returned an empty combined result.');
  if(episodeId)await q(supabase.from('episodes').update({translation:polished,updated_at:new Date().toISOString()}).eq('id',episodeId).eq('novel_id',novelId));
- const remainingWarnings=polishedChunks.flatMap((chunk,index)=>validatePolishOutput(chunk,chunks[index]||'',[]).map(issue=>'chunk '+(index+1)+': '+issue));
+ const remainingWarnings=polishedChunks.flatMap((chunk,index)=>validatePolishOutput(chunk,chunks[index]||'',[],{yaTarget:baseYa+(index<extraYa?1:0),allowedNames}).map(issue=>'chunk '+(index+1)+': '+issue));
  res.json({translation:polished,model:'gemini-3.1-flash-lite / gemini-3.5-flash-lite',pass1Chars:countChars(translation),pass2Chars:countChars(polished),changed:normalizeForCompare(polished)!==normalizeForCompare(translation),validated:remainingWarnings.length===0,phase2OutputAccepted:true,polishFallback:false,validationWarnings:remainingWarnings,totalChunks:chunks.length,correctivePasses:2});
 }catch(e){console.error('POLISH failed:',e?.stack||e?.message||e);res.status(e?.status||502).json({error:String(e?.message||e),validated:false,polishFallback:false,phase2Failed:true})}});
 
