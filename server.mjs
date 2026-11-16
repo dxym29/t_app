@@ -279,7 +279,18 @@ function validatePolishOutput(text,source,finishReasons=[],yaTarget=13){
 function polishValidationRetryPrompt(source,issues,novelStyle='',previousContext='',yaTarget=13){
  const p=polishPrompt(source,true,novelStyle,previousContext,yaTarget),anchor='Return ONLY the polished Myanmar text. No preface, labels, notes, or explanation.';
  if(!p.includes(anchor))throw new Error('Could not construct Polish validation retry prompt.');
- return p.replace(anchor,'Fix these validation issues: '+issues.join('; ')+'. Re-read and polish the complete input chunk without omitting any story detail. STRICT REQUIREMENT: every foreign-script word must be expressed in Myanmar script. Before responding, scan the entire output and correct all listed issues.\\n'+anchor);
+ const rules=[
+  'This is a corrective editing pass. You MUST fix every listed validation issue; do not merely explain or acknowledge it.',
+  'Use the complete supplied input chunk as the source of truth. Preserve every story fact, event, action, thought, emotion, relationship, and dialogue meaning.',
+  'Do not shorten, summarize, omit, or replace the chunk with a partial answer.',
+  'Keep every protected NameLock token exactly as supplied, with the same count and spelling. Do not translate, delete, duplicate, or invent tokens.',
+  'Fix the identified validation problems without undoing valid edits from the previous attempt.',
+  'For sentence-final “၏” issues, ensure at least '+yaTarget+' complete narration sentences in THIS chunk end with the final character “၏”. Count only sentence-final usage, not possessive usage or dialogue; distribute endings naturally and grammatically.',
+  'For foreign-script issues, convert every Latin or other foreign-script letter into natural Myanmar-script translation or transliteration; retain only exact protected NameLock tokens.',
+  'For output-length or paragraph-count issues, restore missing content and paragraph structure from the supplied input. Never pad with invented wording.',
+  'Before returning, silently re-check the complete output against every issue listed below and confirm each one is fixed.'
+ ];
+ return p.replace(anchor,'CORRECTIVE PASS — REQUIRED FIXES:\\n- '+rules.join('\\n- ')+'\\nVALIDATION ISSUES TO FIX: '+issues.join('; ')+'\\n'+anchor);
 }
 
 app.get('/api/health',(_,res)=>res.json({ok:true}));
@@ -451,8 +462,8 @@ app.post('/api/polish',async(req,res)=>{try{
   }
   if(issues.length){
    const message='Phase 2 validation did not pass after 5 corrective passes for chunk '+(index+1)+': '+issues.join('; ');
-   console.error(message);
-   const error=new Error(message);error.status=502;throw error;
+   console.error(message+'; returning the original Phase 1 chapter for the explicitly configured safe fallback.');
+   return res.json({translation,model:'phase-1-fallback',pass1Chars:countChars(translation),pass2Chars:0,changed:false,validated:false,polishFallback:true,phase2Failed:true,fallbackReason:message,validationWarnings:issues,totalChunks:chunks.length,failedChunk:index+1,correctivePasses:5});
   }
   polishedChunks.push(polished);
  }
