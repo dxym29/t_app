@@ -19,14 +19,14 @@
   </section>
 
   <section class="card" id="episodeEditor">
-    <div class="row"><label class="grow">Episode <select id="episodeSelect"></select></label><button id="newEpisodeBtn">New Episode</button><button id="deleteEpisodeBtn" class="danger">Delete</button></div>
+    <div class="row"><label class="grow">Episode <select id="episodeSelect"></select></label><button id="newEpisodeBtn">New Episode</button><button id="deleteEpisodeBtn" class="danger">Delete</button></div><div id="episodeSummary" class="muted">Raw chapters: — • Translated: —</div>
     <input id="episodeNumber" type="number" min="1" placeholder="Episode number"><input id="episodeTitle" placeholder="Episode title">
   </section>
 
   <section class="card">
     <h2>Batch Translate / Polish / Save</h2>
     <p class="muted">Each chapter is cleaned in English first using the Glossary API and replaces Original only after success. Translation uses 10,000-character chunks when needed. Quota and PROHIBITED_CONTENT skip the chapter; other errors retry every 3 seconds. NameLock validation falls back to normal translation. If Myanmar polishing fails, Pass 1 is saved and the batch continues.</p>
-    <div class="row"><label>Start chapter <input id="batchStart" type="number" min="1" placeholder="204"></label><label>Chapters <input id="batchCount" type="number" min="1" max="500" value="10"></label><button id="batchBtn" class="primary">Run Batch</button></div>
+    <div class="row"><label>Start chapter <input id="batchStart" type="number" min="1" placeholder="204"></label><label>Chapters <input id="batchCount" type="number" min="1" max="500" value="10"></label><label>Run mode <select id="batchMode"><option value="all">All chapters (current behavior)</option><option value="untranslated">Only chapters without translation</option></select></label><button id="batchBtn" class="primary">Run Batch</button></div>
     <div id="batchStatus" class="muted"></div>
   </section>
 
@@ -41,9 +41,9 @@
   <section class="card"><h2>Website Export / Backup</h2><p class="muted">Export the selected novel as the exact MM Novel workbook format. Choose a starting and ending chapter to export only that range. Leave both blank to export the whole novel. The workbook template and its columns remain unchanged. JSON backup remains available for database moves.</p><div class="row"><label>From chapter <input id="exportFromChapter" type="number" min="1" placeholder="e.g. 100"></label><label>To chapter <input id="exportToChapter" type="number" min="1" placeholder="e.g. 200"></label><button id="exportTemplateBtn" class="primary">Export Website Excel</button><button id="exportNovelBtn">Export JSON Backup</button><button id="exportAllBtn">Export All JSON</button><label class="fileBtn">Import Backup<input id="importFile" type="file" accept=".json" hidden></label></div></section>
   <section class="card"><h2>Chapter Finder</h2><p class="muted">Raw သို့မဟုတ် Translation ကိုရွေးပြီး ရှိ/မရှိအလိုက် Chapter တွေကို စစ်နိုင်ပါတယ်။ ရလဒ်ကိုနှိပ်ရင် သက်ဆိုင်ရာ Chapter ကိုဖွင့်ပေးပါမယ်။</p><div class="row"><label class="grow">အမျိုးအစား <select id="outputStatusField"><option value="raw">Raw</option><option value="translation">Translation</option></select></label><label class="grow">အခြေအနေ <select id="outputStatusState"><option value="missing">မရှိ</option><option value="exists">ရှိ</option></select></label></div><div id="outputStatusTable" class="muted">Loading...</div></section><section class="card"><h2>Episodes</h2><div id="episodes"></div></section>
 </main>
-<script src="/app.js?v=20261107-4"></script>
+<script src="/app.js?v=20261116-1"></script>
 <script src="/series.js?v=20261107-2"></script>
-<script src="/batch.js?v=20261107-2"></script>
+<script src="/batch.js?v=20261116-1"></script>
 <script>
 // Chapter-limited website Excel export. This overrides only the export button
 // handler so the rest of the existing frontend workflow stays unchanged.
