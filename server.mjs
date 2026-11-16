@@ -285,8 +285,9 @@ function polishValidationRetryPrompt(source,issues,novelStyle='',previousContext
   'Do not shorten, summarize, omit, or replace the chunk with a partial answer.',
   'Keep every protected NameLock token exactly as supplied, with the same count and spelling. Do not translate, delete, duplicate, or invent tokens.',
   'Fix the identified validation problems without undoing valid edits from the previous attempt.',
-  'For sentence-final “၏” issues, ensure at least '+yaTarget+' complete narration sentences in THIS chunk end with “၏”, allowing normal punctuation immediately after it. Count only sentence-final usage, not possessive usage or dialogue; distribute endings naturally and grammatically.',
-  'For foreign-script issues, convert every Latin or other foreign-script letter into natural Myanmar-script translation or transliteration; retain only exact protected NameLock tokens.',
+  'MANDATORY COUNT FIX: The validation minimum is not optional. If the current text is short by even ONE sentence (for example 6/7), rewrite one or more suitable narration sentences so at least '+yaTarget+' narration sentences end with “၏” followed by normal punctuation or whitespace. Do not claim there is no suitable sentence; make the smallest grammatical edit needed. Do not count dialogue or possessive “၏”.',
+  'MANDATORY SCRIPT FIX: The final story must contain ZERO Latin, Chinese, Japanese, Korean, or other foreign-script letters. Translate or transliterate every detected foreign word/name into Myanmar script. Never leave an English fragment, initials, abbreviation, or parenthetical original spelling. Only exact protected NameLock tokens may remain.',
+  'Re-check the entire current draft after editing. If any listed validation issue remains, fix it before returning; do not return a draft that you know still fails.',
   'For output-length or paragraph-count issues, restore missing content and paragraph structure from the supplied input. Never pad with invented wording.',
   'Before returning, silently re-check the complete output against every issue listed below and confirm each one is fixed.'
  ];
@@ -446,7 +447,9 @@ app.post('/api/polish',async(req,res)=>{try{
   while(issues.length&&correctionPass<5){
    correctionPass++;
    console.warn('POLISH chunk '+(index+1)+' corrective pass '+correctionPass+'/5: '+issues.join('; '));
-   const retryBase=polishValidationRetryPrompt(locked,issues,novelStyle,previousContext,yaTarget);
+   // Build each correction from the latest failed draft, not the original Pass 1 chunk.
+   const correctionSource=lockValid?lockTranslationText(polished,locks):locked;
+   const retryBase=polishValidationRetryPrompt(correctionSource,issues,novelStyle,previousContext,yaTarget);
    const retryPrompt=retryBase.replace('INPUT:',glossaryNote+'\n\nINPUT:');
    result=await runPolishTask(retryPrompt,'POLISH-CHUNK-RETRY-'+(index+1)+'-'+correctionPass+'/'+chunks.length);
    raw=String(result.text||'').trim();
