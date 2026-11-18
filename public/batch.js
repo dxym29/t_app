@@ -21,7 +21,7 @@
     }
   }
   async function translateUntilNonEmpty(label,e){
-    const p1=await api('/api/translate',{method:'POST',body:JSON.stringify({novelId:currentNovel.id,episodeId:e.id,source:e.source})});
+    const p1=await api('/api/translate',{method:'POST',body:JSON.stringify({novelId:currentNovel.id,episodeId:e.id,source:e.source,deferSave:true})});
     if(!String(p1?.translation||'').trim())throw new Error('Phase 1 returned empty output; stopping this chapter rather than repeating the full-chapter request.');
     return p1;
   }
