@@ -2,8 +2,6 @@
   const $=id=>document.getElementById(id);
   if(!$('batchBtn'))return;
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-  const RETRY_DELAY=5000;
-  function isQuotaError(error){const text=String(error?.message||error||'').toLowerCase();return /quota|resource exhausted|rate.?limit|too many requests|\b429\b|exceeded.*limit|limit.*exceeded/.test(text)}
   async function requestNotifications(){if(!('Notification' in window))return false;if(Notification.permission==='granted')return true;if(Notification.permission==='denied')return false;try{return (await Notification.requestPermission())==='granted'}catch{return false}}
   function notify(title,body,tag='batch'){if(!('Notification' in window)||Notification.permission!=='granted')return;try{const n=new Notification(title,{body,tag});n.onclick=()=>{window.focus();n.close()}}catch{}}
   function setEpisodeUI(e){currentEpisode=e;$('episodeNumber').value=e.number??'';$('episodeTitle').value=e.title||'';$('source').value=e.source||'';$('translation').value=e.translation||'';$('polishedTranslation').value='';sessionStorage.setItem('episodeId',e.id);updateStats();if($('episodeSelect'))$('episodeSelect').value=e.id}
@@ -14,7 +12,7 @@
     try{return await fn()}
     catch(error){
       const message=String(error?.message||error);
-      const note=label+' • '+phase+' failed after 4 model attempts: '+message;
+      const note=label+' • '+phase+' failed; skipping this chapter: '+message;
       $('batchStatus').textContent=note;
       setStatus(note,false);
       throw error;
