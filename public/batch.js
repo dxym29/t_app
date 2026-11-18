@@ -88,35 +88,20 @@
         if(!String(e.source||'').trim()){skipped++;emptySkipped++;skippedReasons.push(`#${e.number}: source is empty`);$('batchStatus').textContent=`${label} • skipped — source data is empty`;setStatus(`${label} skipped — source data is empty. Continuing batch...`,false);continue}
         $('batchStatus').textContent=`${label} • English cleanup / filter (Glossary API)...`;
         const rawSource=String(e.source||'');
-        let cleanedSource='',cleanAttempt=0;
-        while(!cleanedSource){
-          cleanAttempt++;
-          try{
-            const cleaned=await api('/api/clean-chapter',{method:'POST',body:JSON.stringify({source:rawSource})});
-            cleanedSource=String(cleaned?.source||'').trim();
-            if(!cleanedSource)throw new Error('Glossary API English cleanup returned empty text.');
-          }catch(cleanError){
-            const cleanMessage=String(cleanError?.message||cleanError);
-            if(/PROHIBITED_CONTENT|prompt.?block|safety.?block|CONTENT_BLOCKED/i.test(cleanMessage)){
-              skipped++;skippedReasons.push('#'+e.number+': PROHIBITED_CONTENT during English cleanup; no retry.');
-              $('source').value=rawSource;updateStats();
-              $('batchStatus').textContent=label+' • skipped — English cleanup blocked';
-              setStatus(label+' skipped because English cleanup was blocked. Continuing to next chapter...',false);
-              break;
-            }
-            if(isQuotaError(cleanError)){
-              skipped++;skippedReasons.push('#'+e.number+': quota exceeded during English cleanup; raw source retained.');
-              $('source').value=rawSource;updateStats();
-              $('batchStatus').textContent=label+' • skipped — cleanup quota exceeded';
-              setStatus(label+' skipped — cleanup quota exceeded; raw source retained. Continuing batch...',false);
-              break;
-            }
-            $('batchStatus').textContent=label+' • English cleanup error (attempt '+cleanAttempt+') • retrying in 3s...';
-            setStatus(label+' • English cleanup failed; retry '+cleanAttempt+'...',false);
-            await sleep(3000);
-          }
+        let cleanedSource='';
+        try{
+          const cleaned=await api('/api/clean-chapter',{method:'POST',body:JSON.stringify({source:rawSource})});
+          cleanedSource=String(cleaned?.source||'').trim();
+          if(!cleanedSource)throw new Error('English cleanup returned empty text.');
+          $('batchStatus').textContent=label+' • English cleanup completed.';
+        }catch(cleanError){
+          // Cleanup is optional: preserve the fetched source and keep the batch moving.
+          // The existing glossary and translation stages remain responsible for their own checks.
+          cleanedSource=rawSource;
+          console.warn(label+' • English cleanup failed; using original raw source:',String(cleanError?.message||cleanError));
+          $('batchStatus').textContent=label+' • cleanup unavailable • using original source...';
+          setStatus(label+' • cleanup unavailable; continuing with original source...',true);
         }
-        if(!cleanedSource)continue;
         e.source=cleanedSource;
         $('source').value=cleanedSource;
         updateStats();
