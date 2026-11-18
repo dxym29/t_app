@@ -44,17 +44,6 @@ const replacement=`async function buildTemplateWorkbook(novelId,fromChapter=null
 }`;
 source=source.slice(0,start)+replacement+source.slice(end);
 
-// Separate translation fallback API.
-const translateKey=`const aiTranslate=new GoogleGenAI({apiKey:process.env.GEMINI_API_KEY});`;
-const fallbackKey=`const aiTranslateFallbackKey=process.env.GEMINI_TRANSLATE_FALLBACK_API_KEY||'';
-const aiTranslateFallback=aiTranslateFallbackKey?new GoogleGenAI({apiKey:aiTranslateFallbackKey}):null;
-const TRANSLATE_FALLBACK_MODEL=process.env.GEMINI_TRANSLATE_FALLBACK_MODEL||'gemini-3.1-flash-lite';
-const aiTranslateFallbackKey2=process.env.GEMINI_TRANSLATE_FALLBACK_API_KEY_2||'';
-const aiTranslateFallback2=aiTranslateFallbackKey2?new GoogleGenAI({apiKey:aiTranslateFallbackKey2}):null;
-const TRANSLATE_FALLBACK_MODEL_2=process.env.GEMINI_TRANSLATE_FALLBACK_MODEL_2||'gemini-3.1-flash-lite';`;
-if(!source.includes(translateKey))throw new Error('Primary translation client was not found.');
-source=source.replace(translateKey,fallbackKey+'\n'+translateKey);
-
 // Replace NameLock helpers with alias-aware, output-validating helpers.
 const lockStart=source.indexOf('function buildNameLocks(');
 const lockEnd=source.indexOf('function countChars(',lockStart);
