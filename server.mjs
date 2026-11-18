@@ -176,7 +176,7 @@ SENTENCE ENDINGS AND RHYTHM:
 - Do NOT make every narration sentence end mechanically with “သည်”.
 - Vary sentence endings naturally according to grammar, narrative voice, and context. Suitable forms may include “သည်”, “၏”, “တယ်”, “ပါ”, “ခဲ့သည်”, “လာသည်”, “ဖြစ်သည်”, and other natural Burmese constructions.
 - Use “၏” naturally and correctly in narration sentence endings where Burmese grammar permits it; never use it ungrammatically or mechanically replace every “သည်” with “၏”.
-- When a narration sentence uses the future ending “မည်”, add “၏” after it as “မည်၏” when using the formal sentence-final “၏” style; do not leave “မည်” alone in those sentences.
+- NEVER append “၏” after “မည်”. Keep “မည်” as a natural sentence ending; meet the “၏” minimum using other narration sentences where “၏” is grammatically correct.
 - CHAPTER-LEVEL VALIDATION REQUIREMENT: This chapter must contain at least 13 narration sentences ending with “၏”. The complete chapter's minimum is ${yaTarget}. Meet the assigned minimum with grammatical narration sentences; dialogue and possessive “၏” inside a sentence do not count.
 - Count a sentence-final “၏” when it is followed by Myanmar/English sentence punctuation, a line break, or the end of the chapter. Do not treat a possessive marker followed by more words as sentence-final.
 - Keep sentence endings varied and natural while meeting the assigned minimum; do not put “၏” at the end of every sentence.
@@ -265,7 +265,7 @@ function polishValidationRetryPrompt(currentDraft,issues,novelStyle='',previousC
   'Fix EVERY validation issue listed below in this single pass. Do not leave any listed issue for a later pass, and do not merely explain or acknowledge an issue.',
   'Perform a full-chapter editorial sweep: inspect every paragraph and sentence for unnatural Burmese syntax, literal translation patterns, awkward particles, repeated wording, weak verbs, inconsistent voice, and poor sentence rhythm. Rewrite weak passages decisively while preserving exact meaning.',
   'Preserve every character name exactly as it appears in the original input. Never translate, transliterate, respell, normalize, shorten, expand, or otherwise alter a character name.',
-  'Meet the complete chapter sentence-final “၏” minimum with grammatically correct narration sentences. Never force “၏” into dialogue or use it as a possessive marker to satisfy the count. For narration sentences using the future ending “မည်”, use “မည်၏” when that formal ending is intended.',
+  'Meet the complete chapter sentence-final “၏” minimum with grammatically correct narration sentences. Never force “၏” into dialogue or use it as a possessive marker to satisfy the count. Never append “၏” after “မည်”; keep “မည်” as a natural ending and meet the minimum with other grammatically suitable narration sentences.',
   'Convert all foreign-script words to accurate natural Myanmar-script wording or transliteration, except exact character names that must remain unchanged.',
   'Replace every asterisk used as an inner-thought or formatting marker with single quotation marks. Remove all stray asterisks.',
   'Keep the complete chapter from its first sentence to its final sentence. Do not summarize, shorten, omit, duplicate, add headings, or return a partial answer.',
