@@ -138,7 +138,7 @@ const translateStart=source.indexOf("app.post('/api/translate'");
 const translateEnd=source.indexOf('\nfunction parseGlossaryJson',translateStart);
 if(translateStart<0||translateEnd<0)throw new Error('Translate route could not be patched safely.');
 const translateReplacement=`app.post('/api/translate',async(req,res)=>{try{
- const {novelId,episodeId,source}=req.body;
+ const {novelId,episodeId,source,deferSave=false}=req.body;
  if(!novelId||!String(source||'').trim())return res.status(400).json({error:'Novel and source are required'});
  const novel=await q(supabase.from('novels').select('*').eq('id',novelId).single());
  const allGlossary=await getGlossary(novelId);
@@ -163,7 +163,7 @@ const translateReplacement=`app.post('/api/translate',async(req,res)=>{try{
   nameLockFallback=true;
  }else output=restoreNameLocks(output,chapterLocks);
  if(!output)throw new Error('Phase 1 returned an empty full-chapter translation.');
- if(episodeId)await q(supabase.from('episodes').update({source,translation:output,model:result.model,status:'translated',updated_at:new Date().toISOString()}).eq('id',episodeId).eq('novel_id',novelId));
+ if(episodeId&&!deferSave)await q(supabase.from('episodes').update({source,translation:output,model:result.model,status:'translated',updated_at:new Date().toISOString()}).eq('id',episodeId).eq('novel_id',novelId));
  res.json({translation:output,model:result.model,sourceChars:countChars(source),pass1Chars:countChars(output),nameLockNeutralFallback:nameLockFallback,neutralFallbackChunks:nameLockFallback?1:0});
 }catch(e){
  const message=String(e?.message||e);
