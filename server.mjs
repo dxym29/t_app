@@ -177,7 +177,7 @@ SENTENCE ENDINGS AND RHYTHM:
 - Vary sentence endings naturally according to grammar, narrative voice, and context. Suitable forms may include “သည်”, “၏”, “တယ်”, “ပါ”, “ခဲ့သည်”, “လာသည်”, “ဖြစ်သည်”, and other natural Burmese constructions.
 - Use “၏” naturally and correctly in narration sentence endings where Burmese grammar permits it; never use it ungrammatically or mechanically replace every “သည်” with “၏”.
 - CHAPTER-LEVEL VALIDATION REQUIREMENT: This chapter must contain at least 13 narration sentences ending with “၏”. The complete chapter's minimum is ${yaTarget}. Meet the assigned minimum with grammatical narration sentences; dialogue and possessive “၏” inside a sentence do not count.
-- Count a sentence-final “၏” when it is followed by Myanmar/English sentence punctuation, a line break, or the end of the chunk. Do not treat a possessive marker followed by more words as sentence-final.
+- Count a sentence-final “၏” when it is followed by Myanmar/English sentence punctuation, a line break, or the end of the chapter. Do not treat a possessive marker followed by more words as sentence-final.
 - Keep sentence endings varied and natural while meeting the assigned minimum; do not put “၏” at the end of every sentence.
 - Keep dialogue endings natural to the speaker; do not impose the narration's “၏” style on spoken dialogue.
 - Vary rhythm while maintaining a consistent Myanmar literary voice.
@@ -366,7 +366,7 @@ app.post('/api/translate',async(req,res)=>{try{
  }else output=restoreNameLocks(output,locks);
  if(!output)throw new Error('Phase 1 returned an empty full-chapter translation.');
  if(episodeId&&!deferSave)await q(supabase.from('episodes').update({source,translation:output,model:result.model,status:'translated',updated_at:new Date().toISOString()}).eq('id',episodeId).eq('novel_id',novelId));
- res.json({translation:output,model:result.model,sourceChars:countChars(source),pass1Chars:countChars(output),nameLockNeutralFallback:nameLockFallback,neutralFallbackChunks:nameLockFallback?1:0});
+ res.json({translation:output,model:result.model,sourceChars:countChars(source),pass1Chars:countChars(output),nameLockNeutralFallback:nameLockFallback});
 }catch(e){fail(res,e)}});
 function parseGlossaryJson(text){const raw=String(text||'').trim().replace(/^\uFEFF/,'').replace(/^\`\`\`(?:json)?\s*/i,'').replace(/\s*\`\`\`$/,'').trim();try{return JSON.parse(raw)}catch(firstError){const start=raw.indexOf('{');if(start<0)throw firstError;let depth=0,inString=false,escaped=false;for(let i=start;i<raw.length;i++){const ch=raw[i];if(inString){if(escaped)escaped=false;else if(ch==='\\')escaped=true;else if(ch==='"')inString=false;continue}if(ch==='"'){inString=true;continue}if(ch==='{')depth++;else if(ch==='}'&&--depth===0){const candidate=raw.slice(start,i+1);try{return JSON.parse(candidate)}catch{return JSON.parse(candidate.replace(/,\s*([}\]])/g,'$1'))}}}throw firstError}}
 app.post('/api/extract-glossary',async(req,res)=>{try{const {source}=req.body;if(!source?.trim())return res.status(400).json({error:'Source is required'});const r=await runTwoModelTask(primaryAiGlossary,glossaryPrompt(source),'GLOSSARY');let data;try{data=parseGlossaryJson(r.text)}catch{throw new Error('Glossary AI returned invalid JSON. Please try again.')}if(!validateGlossaryObject(data))throw new Error('Glossary AI returned an invalid format.');res.json({glossary:data,model:r.model,sourceChars:countChars(source)})}catch(e){fail(res,e)}});
@@ -444,7 +444,7 @@ app.post('/api/polish',async(req,res)=>{try{
  }
  if(issues.length)console.warn('PHASE 2: remaining non-blocking validation warnings after the one corrective pass; accepting the complete latest output: '+issues.join('; '));
  if(episodeId)await q(supabase.from('episodes').update({translation:polished,updated_at:new Date().toISOString()}).eq('id',episodeId).eq('novel_id',novelId));
- res.json({translation:polished,model:result.model,pass1Chars:countChars(translation),pass2Chars:countChars(polished),changed:normalizeForCompare(polished)!==normalizeForCompare(translation),validated:issues.length===0,phase2OutputAccepted:true,polishFallback:false,validationWarnings:issues,correctivePasses,totalChunks:1});
+ res.json({translation:polished,model:result.model,pass1Chars:countChars(translation),pass2Chars:countChars(polished),changed:normalizeForCompare(polished)!==normalizeForCompare(translation),validated:issues.length===0,phase2OutputAccepted:true,polishFallback:false,validationWarnings:issues,correctivePasses});
 }catch(e){console.error('POLISH failed:',e?.stack||e?.message||e);res.status(e?.status||502).json({error:String(e?.message||e),validated:false,polishFallback:false,phase2Failed:true})}});
 function slugify(value){return String(value||'novel').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Za-z0-9]+/g,'-').replace(/^-+|-+$/g,'').toLowerCase()||'novel'}
 function excelValue(value){return value==null?'':String(value)}
