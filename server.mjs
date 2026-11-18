@@ -11,9 +11,15 @@ const PORT=process.env.PORT||3000;
 app.use(express.json({limit:'20mb'}));
 app.use(express.static('public'));
 
-const aiTranslate=new GoogleGenAI({apiKey:process.env.GEMINI_API_KEY});
-const aiGlossary=new GoogleGenAI({apiKey:process.env.GEMINI_GLOSSARY_API_KEY||process.env.GEMINI_API_KEY_2});
-const aiPolish=new GoogleGenAI({apiKey:process.env.GEMINI_POLISH_API_KEY||process.env.GEMINI_API_KEY_3});
+const primaryAiTranslate=new GoogleGenAI({apiKey:process.env.GEMINI_API_KEY});
+const primaryAiGlossary=new GoogleGenAI({apiKey:process.env.GEMINI_GLOSSARY_API_KEY||process.env.GEMINI_API_KEY_2});
+const primaryAiPolish=new GoogleGenAI({apiKey:process.env.GEMINI_POLISH_API_KEY||process.env.GEMINI_API_KEY_3});
+const backupApiKeys=[
+ process.env.GEMINI_BACKUP_API_KEY_1||process.env.GEMINI_FALLBACK_API_KEY_1,
+ process.env.GEMINI_BACKUP_API_KEY_2||process.env.GEMINI_FALLBACK_API_KEY_2,
+ process.env.GEMINI_BACKUP_API_KEY_3||process.env.GEMINI_FALLBACK_API_KEY_3
+].map(x=>String(x||'').trim()).filter(Boolean);
+const backupAiClients=backupApiKeys.map(apiKey=>new GoogleGenAI({apiKey}));
 const supabase=createClient(process.env.SUPABASE_URL,process.env.SUPABASE_SERVICE_ROLE_KEY,{auth:{persistSession:false}});
 const MODELS=['gemini-3.1-flash-lite','gemini-3.5-flash-lite'];
 const MODEL_TIMEOUT=45000;
@@ -22,6 +28,10 @@ function id(){return crypto.randomUUID()}
 function fail(res,e){console.error(e);return res.status(500).json({error:e.message||'Server error'})}
 async function q(promise){const {data,error}=await promise;if(error)throw new Error(error.message);return data}
 function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
+function isQuotaExceeded(error){
+ const message=String(error?.message||error||'');
+ return /quota.?exceeded|resource.?exhausted|rate.?limit.?exceeded|requests.?per.?day|requests.?per.?minute|tokens.?per.?minute|429|billing.?not.?enabled/i.test(message);
+}
 async function generateModel(ai,prompt,model,jsonMode=false){
  const started=Date.now();
  console.log('Trying model: '+model);
@@ -35,24 +45,40 @@ async function generateModel(ai,prompt,model,jsonMode=false){
  if(finishReasons.some(x=>['MAX_TOKENS','SAFETY','RECITATION'].includes(String(x).toUpperCase())))throw new Error('Incomplete or blocked model output from '+model+'; finishReason='+finishReasons.join(','));
  return {text,model,finishReasons,promptFeedback};
 }
-async function runTwoModelTask(ai,prompt,tag){
- const jsonMode=tag==='GLOSSARY';
- const sequence=[MODELS[0],MODELS[1],MODELS[0],MODELS[1]];
+async function runTwoModelTask(primaryAi,prompt,tag){
+ const jsonMode=tag==='GLOSSARY'||tag==='GLOSSARY_AUTO';
+ const clients=[{ai:primaryAi,label:'primary'},...backupAiClients.map((ai,index)=>({ai,label:'backup-'+(index+1)}))];
  let lastError;
- for(let i=0;i<sequence.length;i++){
-  const model=sequence[i];
-  try{return await generateModel(ai,prompt,model,jsonMode)}
-  catch(error){
-   lastError=error;
-   console.warn(tag+': '+model+' failed ('+(i+1)+'/4): '+String(error?.message||error));
-   if(i<sequence.length-1)await sleep(3000);
+ for(let keyIndex=0;keyIndex<clients.length;keyIndex++){
+  const client=clients[keyIndex];
+  const sequence=[MODELS[0],MODELS[1],MODELS[0],MODELS[1]];
+  let quotaHit=false;
+  for(let attempt=0;attempt<sequence.length;attempt++){
+   const model=sequence[attempt];
+   try{
+    const result=await generateModel(client.ai,prompt,model,jsonMode);
+    return {...result,apiKeyPool:client.label};
+   }catch(error){
+    lastError=error;
+    const quota=isQuotaExceeded(error);
+    console.warn(tag+': '+client.label+' '+model+' failed ('+(attempt+1)+'/4; quota='+quota+'): '+String(error?.message||error));
+    if(quota){quotaHit=true;break;}
+    if(attempt<sequence.length-1)await sleep(3000);
+   }
+  }
+  if(!quotaHit){
+   const failure=new Error(tag+': '+client.label+' failed all four model attempts without a quota response. '+String(lastError?.message||'Unknown model error.'));
+   failure.cause=lastError;throw failure;
+  }
+  if(keyIndex<clients.length-1){
+   console.warn(tag+': quota exceeded for '+client.label+'; switching automatically to '+clients[keyIndex+1].label+'.');
+   await sleep(3000);
   }
  }
- const failure=new Error(tag+': both model cycles failed (3.1 -> 3.5 -> 3.1 -> 3.5). '+String(lastError?.message||'Unknown model error.'));
- failure.cause=lastError;
- throw failure;
+ const failure=new Error(tag+': quota exceeded on primary and all '+backupAiClients.length+' configured backup API keys. '+String(lastError?.message||'No API key has remaining quota.'));
+ failure.code='QUOTA_EXHAUSTED';failure.cause=lastError;throw failure;
 }
-async function runPolishTask(prompt,tag){return runTwoModelTask(aiPolish,prompt,tag)}
+async function runPolishTask(prompt,tag){return runTwoModelTask(primaryAiPolish,prompt,tag)}
 
 function buildNameLocks(g){const locks=[];let n=1;for(const [type,arr] of Object.entries(g||{}))for(const x of arr||[]){const original=String(x.original||'').trim(),translation=String(x.translation||'').trim();if(!original||!translation)continue;locks.push({type,original,translation,token:`[[NAMELOCK_${String(n++).padStart(3,'0')}]]`})}locks.sort((a,b)=>b.original.length-a.original.length);return locks}
 function filterGlossaryToSource(g,source){const text=String(source||'').toLocaleLowerCase();const out={};for(const [type,arr] of Object.entries(g||{}))out[type]=(arr||[]).filter(x=>{const original=String(x.original||'').trim();return original&&text.includes(original.toLocaleLowerCase())});return out}
@@ -287,7 +313,7 @@ NOVEL TITLE: ${novel.name||'Untitled novel'}
 
 SAMPLE EXCERPTS:
 ${samples.join('\n\n===== NEXT CHAPTER SAMPLE =====\n\n')}`;
- const result=await runTwoModelTask(aiTranslate,prompt,'STYLE_PROFILE');
+ const result=await runTwoModelTask(primaryAiTranslate,prompt,'STYLE_PROFILE');
  const style=String(result.text||'').trim();
  if(!style)throw new Error('AI returned an empty novel style profile.');
  const saved=await q(supabase.from('novels').update({style,updated_at:new Date().toISOString()}).eq('id',req.params.id).select('style').single());
@@ -330,11 +356,11 @@ app.post('/api/translate',async(req,res)=>{try{
  const allGlossary=await getGlossary(novelId),glossary=filterGlossaryToSource(allGlossary,source),locks=buildNameLocks(glossary);
  const lockedSource=lockText(source,locks),expected=new Map();
  for(const item of locks)expected.set(item.token,countToken(lockedSource,item.token));
- let result=await runTwoModelTask(aiTranslate,masterPrompt({style:novel.style,glossary,locks,source:lockedSource,previousTail:'',sourceContext:''}),'TRANSLATE');
+ let result=await runTwoModelTask(primaryAiTranslate,masterPrompt({style:novel.style,glossary,locks,source:lockedSource,previousTail:'',sourceContext:''}),'TRANSLATE');
  let output=String(result.text||'').trim(),nameLockFallback=false;
  if(!validateLockedOutput(output,locks,expected)){
   console.warn('PHASE 1: NameLock validation failed on the complete chapter; retrying once without NameLock.');
-  result=await runTwoModelTask(aiTranslate,masterPrompt({style:novel.style,glossary,locks:[],source,previousTail:'',sourceContext:''}),'TRANSLATE_NO_NAMELOCK');
+  result=await runTwoModelTask(primaryAiTranslate,masterPrompt({style:novel.style,glossary,locks:[],source,previousTail:'',sourceContext:''}),'TRANSLATE_NO_NAMELOCK');
   output=String(result.text||'').trim();
   nameLockFallback=true;
  }else output=restoreNameLocks(output,locks);
@@ -343,7 +369,7 @@ app.post('/api/translate',async(req,res)=>{try{
  res.json({translation:output,model:result.model,sourceChars:countChars(source),pass1Chars:countChars(output),nameLockNeutralFallback:nameLockFallback,neutralFallbackChunks:nameLockFallback?1:0});
 }catch(e){fail(res,e)}});
 function parseGlossaryJson(text){const raw=String(text||'').trim().replace(/^\uFEFF/,'').replace(/^\`\`\`(?:json)?\s*/i,'').replace(/\s*\`\`\`$/,'').trim();try{return JSON.parse(raw)}catch(firstError){const start=raw.indexOf('{');if(start<0)throw firstError;let depth=0,inString=false,escaped=false;for(let i=start;i<raw.length;i++){const ch=raw[i];if(inString){if(escaped)escaped=false;else if(ch==='\\')escaped=true;else if(ch==='"')inString=false;continue}if(ch==='"'){inString=true;continue}if(ch==='{')depth++;else if(ch==='}'&&--depth===0){const candidate=raw.slice(start,i+1);try{return JSON.parse(candidate)}catch{return JSON.parse(candidate.replace(/,\s*([}\]])/g,'$1'))}}}throw firstError}}
-app.post('/api/extract-glossary',async(req,res)=>{try{const {source}=req.body;if(!source?.trim())return res.status(400).json({error:'Source is required'});const r=await runTwoModelTask(aiGlossary,glossaryPrompt(source),'GLOSSARY');let data;try{data=parseGlossaryJson(r.text)}catch{throw new Error('Glossary AI returned invalid JSON. Please try again.')}if(!validateGlossaryObject(data))throw new Error('Glossary AI returned an invalid format.');res.json({glossary:data,model:r.model,sourceChars:countChars(source)})}catch(e){fail(res,e)}});
+app.post('/api/extract-glossary',async(req,res)=>{try{const {source}=req.body;if(!source?.trim())return res.status(400).json({error:'Source is required'});const r=await runTwoModelTask(primaryAiGlossary,glossaryPrompt(source),'GLOSSARY');let data;try{data=parseGlossaryJson(r.text)}catch{throw new Error('Glossary AI returned invalid JSON. Please try again.')}if(!validateGlossaryObject(data))throw new Error('Glossary AI returned an invalid format.');res.json({glossary:data,model:r.model,sourceChars:countChars(source)})}catch(e){fail(res,e)}});
 function normalizeGlossaryKey(value){return String(value||'').normalize('NFKC').replace(/[“”"'’]/g,'').replace(/\s+/g,' ').trim().toLowerCase()}
 function glossaryLimitForChapter(chapterNo){const n=Math.max(1,Number(chapterNo)||1);if(n<=100)return 30;if(n<=200)return 55;return 70}
 async function addAutoGlossaryForChapter(novelId,chapterNo,source){
@@ -365,7 +391,7 @@ async function addAutoGlossaryForChapter(novelId,chapterNo,source){
   seenOriginal.add(key);seenTranslation.add(translationKey);added++;
  }
  if(existing.length+added>=limit)return {added,total:existing.length+added,limit,stoppedAtLimit:true};
- const r=await runTwoModelTask(aiGlossary,glossaryPrompt(source),'GLOSSARY_AUTO');
+ const r=await runTwoModelTask(primaryAiGlossary,glossaryPrompt(source),'GLOSSARY_AUTO');
  let data;try{data=parseGlossaryJson(r.text)}catch{throw new Error('Automatic glossary extraction returned invalid JSON.')}
  if(!validateGlossaryObject(data))throw new Error('Automatic glossary extraction returned an invalid format.');
  for(const category of ['characters','items','organizations','locations','skills','other']){
