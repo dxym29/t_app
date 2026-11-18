@@ -148,121 +148,39 @@ source=source.replace(glossaryAnchor,glossaryWithChecklist);
 const translateStart=source.indexOf("app.post('/api/translate'");
 const translateEnd=source.indexOf('\nfunction parseGlossaryJson',translateStart);
 if(translateStart<0||translateEnd<0)throw new Error('Translate route could not be patched safely.');
-const translateReplacement=`app.post('/api/translate',async(req,res)=>{try{
-  const {novelId,episodeId,source}=req.body;
-  if(!novelId||!source?.trim())return res.status(400).json({error:'Novel and source are required'});
-  const novel=await q(supabase.from('novels').select('*').eq('id',novelId).single());
-  const allGlossary=await getGlossary(novelId);
-  const glossary=filterGlossaryToSource(allGlossary,source);
-  const locks=buildNameLocks(glossary);
-  const chunks=splitText(source,10000);
-  const stages=[
-    {name:'primary',ai:aiTranslate,model:'gemini-3.1-flash-lite'},
-    {name:'primary',ai:aiTranslate,model:'gemini-3.5-flash-lite'},
-    {name:'fallback-1',ai:aiTranslateFallback,model:'gemini-3.1-flash-lite'},
-    {name:'fallback-1',ai:aiTranslateFallback,model:'gemini-3.5-flash-lite'},
-    {name:'fallback-2',ai:aiTranslateFallback2,model:'gemini-3.1-flash-lite'},
-    {name:'fallback-2',ai:aiTranslateFallback2,model:'gemini-3.5-flash-lite'}
-  ];
-  const isQuota=e=>/429|RESOURCE_EXHAUSTED|quota exceeded|quota exhausted|rate.?limit|GenerateRequestsPerDayPerModel|retryDelay/i.test(String(e?.message||e));
-  const isBlocked=e=>/PROHIBITED_CONTENT|prompt.?block|safety.?block|blocked by Gemini safety filter/i.test(String(e?.message||e));
-  const isLock=e=>/NameLock validation|NameLock placeholder/i.test(String(e?.message||e));
-  let stageIndex=0,modelUsed='gemini-3.1-flash-lite',providerUsed='primary',nameLockFallback=false;
-  const runChunks=async(useLocks)=>{
-    let result='';
-    const workChunks=splitText(source,10000);
-    for(let i=0;i<workChunks.length;i++){
-      const chunk=workChunks[i],previousSource=i>0?workChunks[i-1].slice(-CONTEXT_OVERLAP):'';
-      const chunkLockResult=useLocks?lockChunkWithUniqueTokens(chunk,locks):{text:chunk,locks:[]};
-      const lockedChunk=chunkLockResult.text;
-      const chunkLocks=chunkLockResult.locks;
-      const lockedPrevious=useLocks?lockText(previousSource,locks):previousSource;
-      const expected=new Map(chunkLocks.map(x=>[x.token,1]));
-      // Only expose glossary entries whose source names occur in this chunk.
-      const chunkGlossary=useLocks?filterGlossaryToSource(glossary,chunk):glossary;
-      let done=false,lastError, nameLockAttempts=0,emptyOutputAttempts=0,lastEmptyOutputStage=-1,sameStageErrorAttempts=0;
-      while(!done){
-        if(stageIndex>=stages.length){const exhausted=new Error('SKIP_CHAPTER: all configured translation APIs/models are out of quota.');exhausted.code='QUOTA_EXHAUSTED';throw exhausted;}
-        const stage=stages[stageIndex];
-        if(!stage.ai){
-          console.warn('TRANSLATE: '+stage.name+' is not configured; skipping to next API stage.');
-          stageIndex++;
-          continue;
-        }
-        try{
-          const r=await generateModel(stage.ai,masterPrompt({
-            style:novel.style,glossary:chunkGlossary,locks:chunkLocks,source:lockedChunk,
-            previousTail:result.slice(-5000),sourceContext:lockedPrevious
-          }),stage.model);
-          let output=String(r.text||'').trim();
-          if(!output)throw new Error('Translation model returned empty output.');
-          if(useLocks){
-            output=repairInventedNameLocks(output,chunkLocks);
-            // Some models ignore placeholder syntax but still preserve the literal source name; recover those safely before retrying.
-            output=repairMissingNameLocksFromLiteralNames(output,chunkLocks);
-            const valid=validateLockedOutput(output,chunkLocks,expected);
-            if(!valid){
-              const mismatches=chunkLocks.map(x=>({token:x.token,expected:1,actual:countToken(output,x.token),sourceTerm:x.original})).filter(x=>x.actual!==1);
-              nameLockAttempts++;
-              console.warn('TRANSLATE: NameLock token mismatch for chunk '+(i+1)+'/'+workChunks.length+': '+JSON.stringify(mismatches));
-              if(nameLockAttempts<3){
-                console.warn('TRANSLATE: NameLock validation failed for chunk '+(i+1)+'/'+workChunks.length+'; real retry '+nameLockAttempts+'/3 in 3s.');
-                await sleep(3000);
-                continue;
-              }
-              throw new Error('NameLock validation failed after 3 actual translation attempts.');
-            }
-            output=restoreNameLocks(output,chunkLocks);
-          }else if(/\\[\\[NAMELOCK_[^\\]]+\\]\\]/i.test(output)){
-            throw new Error('Translation output unexpectedly contains a NameLock placeholder.');
-          }
-          result+=(result?'\\n\\n':'')+output;
-          modelUsed=r.model;providerUsed=stage.name;done=true;
-          console.log('TRANSLATE: '+(useLocks?'':'no-NameLock ')+'chunk '+(i+1)+'/'+workChunks.length+' succeeded with '+stage.name+' / '+stage.model+'.');
-        }catch(e){
-          lastError=e;
-          if(isBlocked(e)){
-            const msg='SKIP_CHAPTER: PROHIBITED_CONTENT in chunk '+(i+1)+'/'+workChunks.length+'; no retry or fallback attempted.';
-            console.warn('TRANSLATE: '+msg);
-            const blocked=new Error(msg);blocked.code='CONTENT_BLOCKED';throw blocked;
-          }
-          if(isLock(e)&&useLocks)throw e;
-          if(isQuota(e)){
-            console.warn('TRANSLATE: '+stage.name+' / '+stage.model+' quota exceeded; moving to next configured model/API stage.');
-            stageIndex++;sameStageErrorAttempts=0;
-            continue;
-          }
-          sameStageErrorAttempts++;
-          console.warn('TRANSLATE: '+stage.name+' / '+stage.model+' non-quota error (attempt '+sameStageErrorAttempts+'); retrying in 3s until success: '+String(e?.message||e));
-          await sleep(3000);
-        }
-      }
-    }
-    return result;
-  };
-  let result='';
-  try{
-    result=await runChunks(true);
-  }catch(e){
-    if(!isLock(e))throw e;
-    nameLockFallback=true;
-    console.warn('TRANSLATE: NameLock validation failed after 3 checks. Discarding partial chapter and restarting whole chapter without NameLock.');
-    result=await runChunks(false);
-  }
-  if(episodeId){
-    try{
-      await q(supabase.from('episodes').update({source,translation:result,model:modelUsed,status:'translated',updated_at:new Date().toISOString()}).eq('id',episodeId).eq('novel_id',novelId));
-    }catch(saveError){
-      console.error('TRANSLATE: translation completed but database save failed:',String(saveError?.message||saveError));
-    }
-  }
-  res.json({translation:result,model:modelUsed,sourceChars:countChars(source),pass1Chars:countChars(result),fallbackUsed:providerUsed!=='primary',providerUsed,nameLockFallback});
+const translateReplacement=\`app.post('/api/translate',async(req,res)=>{try{
+ const {novelId,episodeId,source}=req.body;
+ if(!novelId||!String(source||'').trim())return res.status(400).json({error:'Novel and source are required'});
+ const novel=await q(supabase.from('novels').select('*').eq('id',novelId).single());
+ const allGlossary=await getGlossary(novelId);
+ const glossary=filterGlossaryToSource(allGlossary,source);
+ const locks=buildNameLocks(glossary);
+ const lockedResult=lockChunkWithUniqueTokens(source,locks);
+ const lockedSource=lockedResult.text,chapterLocks=lockedResult.locks;
+ const expected=new Map(chapterLocks.map(x=>[x.token,1]));
+ const prompt=masterPrompt({style:novel.style,glossary,locks:chapterLocks,source:lockedSource,previousTail:'',sourceContext:''});
+ let result=await runTwoModelTask(aiTranslate,prompt,'TRANSLATE');
+ let output=String(result.text||'').trim(),nameLockFallback=false;
+ if(output){
+  output=repairInventedNameLocks(output,chapterLocks);
+  output=repairMissingNameLocksFromLiteralNames(output,chapterLocks);
+ }
+ if(!output||!validateLockedOutput(output,chapterLocks,expected)){
+  console.warn('TRANSLATE: full-chapter NameLock validation failed; retrying the entire chapter once without NameLock.');
+  const neutralPrompt=masterPrompt({style:novel.style,glossary,locks:[],source,previousTail:'',sourceContext:''});
+  result=await runTwoModelTask(aiTranslate,neutralPrompt,'TRANSLATE_NO_NAMELOCK');
+  output=String(result.text||'').trim();
+  if(/\\[\\[NAMELOCK_[^\\]]+\\]\\]/i.test(output))throw new Error('Translation output contains an unresolved NameLock placeholder.');
+  nameLockFallback=true;
+ }else output=restoreNameLocks(output,chapterLocks);
+ if(!output)throw new Error('Phase 1 returned an empty full-chapter translation.');
+ if(episodeId)await q(supabase.from('episodes').update({source,translation:output,model:result.model,status:'translated',updated_at:new Date().toISOString()}).eq('id',episodeId).eq('novel_id',novelId));
+ res.json({translation:output,model:result.model,sourceChars:countChars(source),pass1Chars:countChars(output),nameLockNeutralFallback:nameLockFallback,neutralFallbackChunks:nameLockFallback?1:0});
 }catch(e){
-  const message=String(e?.message||e);
-  if(e?.code==='CONTENT_BLOCKED'||message.startsWith('SKIP_CHAPTER:'))return res.status(422).json({error:message,code:'CONTENT_BLOCKED'});
-  console.error('TRANSLATE: request failed:',e?.stack||message);
-  fail(res,e);
-}});`
+ const message=String(e?.message||e);
+ console.error('TRANSLATE: request failed:',e?.stack||message);
+ fail(res,e);
+}});\`
 
 source=source.slice(0,translateStart)+translateReplacement+source.slice(translateEnd);
 
