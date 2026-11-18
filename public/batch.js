@@ -132,10 +132,10 @@
             updateStats();
           }
         }catch(polishError){
-          polishSkipped++;polishErrors.push(`#${e.number}: Phase 2 request failed after the configured model attempts; chapter NOT saved. ${polishError.message||'Polish failed'}`);
-          $('polishedTranslation').value='';updateStats();
-          $('batchStatus').textContent=`${label} • Phase 2 request failed • chapter not saved; continuing...`;
-          throw polishError;
+          polishSkipped++;polishErrors.push(`#${e.number}: Phase 2 failed; saved Phase 1 translation instead. ${polishError.message||'Polish failed'}`);
+          finalText=p1.translation;
+          $('polishedTranslation').value='';$('translation').value=finalText;updateStats();
+          $('batchStatus').textContent=`${label} • Phase 2 failed • saving Phase 1 result...`;
         }
         $('batchStatus').textContent=`${label} • Saving...`;const saved=await runUntilSuccess(label,'Save',()=>saveBatchEpisode(e,finalText));setEpisodeUI({...saved,source:e.source||saved.source||'',translation:finalText});completed++;$('batchStatus').textContent=`${label} • Saved • ${completed}/${chapters.length}`;setStatus(`Batch progress: ${completed}/${chapters.length} saved${skipped?` • ${skipped} skipped`:''}`,true);await sleep(500);
         }catch(chapterError){
