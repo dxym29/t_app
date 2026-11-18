@@ -14,66 +14,46 @@ app.use(express.static('public'));
 const aiTranslate=new GoogleGenAI({apiKey:process.env.GEMINI_API_KEY});
 const aiGlossary=new GoogleGenAI({apiKey:process.env.GEMINI_GLOSSARY_API_KEY||process.env.GEMINI_API_KEY_2});
 const aiPolish=new GoogleGenAI({apiKey:process.env.GEMINI_POLISH_API_KEY||process.env.GEMINI_API_KEY_3});
-const aiPolishFallbackKey=process.env.GEMINI_POLISH_FALLBACK_API_KEY||'';
-const aiPolishFallback=aiPolishFallbackKey?new GoogleGenAI({apiKey:aiPolishFallbackKey}):null;
-const POLISH_FALLBACK_MODEL=process.env.GEMINI_POLISH_FALLBACK_MODEL||'gemini-3.1-flash-lite';
 const supabase=createClient(process.env.SUPABASE_URL,process.env.SUPABASE_SERVICE_ROLE_KEY,{auth:{persistSession:false}});
 const MODELS=['gemini-3.1-flash-lite','gemini-3.5-flash-lite'];
-const CHUNK_SIZES={'gemini-3.1-flash-lite':10000,'gemini-3.5-flash-lite':10000};
-const TRANSLATE_CHUNK_SIZE=10000;
-const CONTEXT_OVERLAP=200;
 const MODEL_TIMEOUT=45000;
-const MAX_RETRIES_PER_MODEL=2;
-const RETRY_DELAY=5000;
 
 function id(){return crypto.randomUUID()}
 function fail(res,e){console.error(e);return res.status(500).json({error:e.message||'Server error'})}
 async function q(promise){const {data,error}=await promise;if(error)throw new Error(error.message);return data}
-function retryable(e){const s=String(e?.message||e);return /429|quota|RESOURCE_EXHAUSTED|503|UNAVAILABLE|overloaded|timeout|temporar/i.test(s)}
 function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
-async function generateModel(ai,prompt,model,jsonMode=false){const started=Date.now();console.log(`Trying model: ${model}`);const response=await ai.models.generateContent({model,contents:prompt,config:{temperature:jsonMode?0.2:0.7,maxOutputTokens:8192,automaticContinuation:false,...(jsonMode?{responseMimeType:'application/json'}:{}),httpOptions:{timeout:MODEL_TIMEOUT}}});const text=String(response.text||'');const candidates=response.candidates||[];const finishReasons=candidates.map(c=>c.finishReason||'unknown');const promptFeedback=response.promptFeedback?.blockReason||null;console.log(`SUCCESS: ${model} (${Date.now()-started}ms; outputChars=${text.length}; finishReason=${finishReasons.join(',')||'no-candidates'}${promptFeedback?'; blockReason='+promptFeedback:''})`);if(!text.trim())throw new Error(`Empty model output from ${model}; finishReason=${finishReasons.join(',')||'no-candidates'}${promptFeedback?'; blockReason='+promptFeedback:''}`);return {text,model,finishReasons,promptFeedback}}
-async function generateWithRetries(ai,prompt,model,jsonMode=false){let lastError;for(let attempt=0;attempt<=MAX_RETRIES_PER_MODEL;attempt++){try{return await generateModel(ai,prompt,model,jsonMode)}catch(e){lastError=e;if(!retryable(e)||attempt===MAX_RETRIES_PER_MODEL)throw e;console.log(`${model} failed (attempt ${attempt+1}/${MAX_RETRIES_PER_MODEL}). Retrying in 5s...`);await sleep(RETRY_DELAY)}}throw lastError}
-async function runTwoModelTask(ai,prompt,tag){const jsonMode=tag==='GLOSSARY';try{return await generateWithRetries(ai,prompt,MODELS[0],jsonMode)}catch(e){if(!retryable(e))throw e;console.log(`${tag}: 3.1 exhausted after 2 retries. Switching to 3.5.`);return await generateWithRetries(ai,prompt,MODELS[1],jsonMode)}}
-function isPolishQuotaError(error){
- const message=String(error?.message||error);
- return /429|quota|RESOURCE_EXHAUSTED|rate.?limit|GenerateRequestsPerDayPerModel|GenerateContentRequestsPerDay|retry.?after/i.test(message);
+async function generateModel(ai,prompt,model,jsonMode=false){
+ const started=Date.now();
+ console.log('Trying model: '+model);
+ const response=await ai.models.generateContent({model,contents:prompt,config:{temperature:jsonMode?0.2:0.7,maxOutputTokens:65536,automaticContinuation:false,...(jsonMode?{responseMimeType:'application/json'}:{}),httpOptions:{timeout:MODEL_TIMEOUT}}});
+ const text=String(response.text||'');
+ const candidates=response.candidates||[];
+ const finishReasons=candidates.map(c=>c.finishReason||'unknown');
+ const promptFeedback=response.promptFeedback?.blockReason||null;
+ console.log('MODEL RESPONSE: '+model+' ('+(Date.now()-started)+'ms; outputChars='+text.length+'; finishReason='+(finishReasons.join(',')||'no-candidates')+(promptFeedback?'; blockReason='+promptFeedback:'')+')');
+ if(!text.trim())throw new Error('Empty model output from '+model+'; finishReason='+(finishReasons.join(',')||'no-candidates')+(promptFeedback?'; blockReason='+promptFeedback:''));
+ if(finishReasons.some(x=>['MAX_TOKENS','SAFETY','RECITATION'].includes(String(x).toUpperCase())))throw new Error('Incomplete or blocked model output from '+model+'; finishReason='+finishReasons.join(','));
+ return {text,model,finishReasons,promptFeedback};
 }
-async function generatePolishWithRetry(ai,prompt,model,tag){
- let attempt=0;
- while(true){
-  try{return await generateModel(ai,prompt,model,false)}
+async function runTwoModelTask(ai,prompt,tag){
+ const jsonMode=tag==='GLOSSARY';
+ const sequence=[MODELS[0],MODELS[1],MODELS[0],MODELS[1]];
+ let lastError;
+ for(let i=0;i<sequence.length;i++){
+  const model=sequence[i];
+  try{return await generateModel(ai,prompt,model,jsonMode)}
   catch(error){
-   if(isPolishQuotaError(error))throw error;
-   attempt++;
-   console.warn(tag+': '+model+' non-quota error on attempt '+attempt+'; retrying same model in 3 seconds: '+String(error?.message||error));
-   await sleep(3000);
+   lastError=error;
+   console.warn(tag+': '+model+' failed ('+(i+1)+'/4): '+String(error?.message||error));
+   if(i<sequence.length-1)await sleep(3000);
   }
  }
+ const failure=new Error(tag+': both model cycles failed (3.1 -> 3.5 -> 3.1 -> 3.5). '+String(lastError?.message||'Unknown model error.'));
+ failure.cause=lastError;
+ throw failure;
 }
-async function runPolishTask(prompt,tag){
- const primaryModels=['gemini-3.1-flash-lite','gemini-3.5-flash-lite'];
- let lastQuotaError=null;
- for(const model of primaryModels){
-  try{return await generatePolishWithRetry(aiPolish,prompt,model,tag)}
-  catch(error){
-   if(!isPolishQuotaError(error))throw error;
-   lastQuotaError=error;
-   console.warn(tag+': '+model+' quota exceeded; immediately switching to the next polish model.');
-  }
- }
- if(aiPolishFallback){
-  try{
-   console.warn(tag+': both primary polish models are quota-exhausted; switching to the separate polish fallback API.');
-   return await generatePolishWithRetry(aiPolishFallback,prompt,POLISH_FALLBACK_MODEL,tag+'-FALLBACK');
-  }catch(error){
-   if(isPolishQuotaError(error))throw new Error('All configured polish API/model stages are quota-exhausted. '+String(error?.message||error));
-   throw error;
-  }
- }
- throw new Error('Both primary polish models are quota-exhausted and no separate polish fallback API is configured. '+String(lastQuotaError?.message||''));
-}
+async function runPolishTask(prompt,tag){return runTwoModelTask(aiPolish,prompt,tag)}
 
-function splitText(text,maxChars=TRANSLATE_CHUNK_SIZE){if(text.length<=maxChars)return [text];const paragraphs=text.split(/\n\s*\n/);const chunks=[];let current='';for(const p of paragraphs){const block=p.trim();if(!block)continue;const candidate=current?current+'\n\n'+block:block;if(candidate.length<=maxChars)current=candidate;else{if(current)chunks.push(current);if(block.length<=maxChars)current=block;else{for(let i=0;i<block.length;i+=maxChars)chunks.push(block.slice(i,i+maxChars));current=''}}}if(current)chunks.push(current);return chunks.filter(Boolean)}
 function buildNameLocks(g){const locks=[];let n=1;for(const [type,arr] of Object.entries(g||{}))for(const x of arr||[]){const original=String(x.original||'').trim(),translation=String(x.translation||'').trim();if(!original||!translation)continue;locks.push({type,original,translation,token:`[[NAMELOCK_${String(n++).padStart(3,'0')}]]`})}locks.sort((a,b)=>b.original.length-a.original.length);return locks}
 function filterGlossaryToSource(g,source){const text=String(source||'').toLocaleLowerCase();const out={};for(const [type,arr] of Object.entries(g||{}))out[type]=(arr||[]).filter(x=>{const original=String(x.original||'').trim();return original&&text.includes(original.toLocaleLowerCase())});return out}
 function lockText(text,locks){let out=String(text||'');for(const x of locks)out=out.split(x.original).join(x.token);return out}
@@ -170,7 +150,7 @@ SENTENCE ENDINGS AND RHYTHM:
 - Do NOT make every narration sentence end mechanically with “သည်”.
 - Vary sentence endings naturally according to grammar, narrative voice, and context. Suitable forms may include “သည်”, “၏”, “တယ်”, “ပါ”, “ခဲ့သည်”, “လာသည်”, “ဖြစ်သည်”, and other natural Burmese constructions.
 - Use “၏” naturally and correctly in narration sentence endings where Burmese grammar permits it; never use it ungrammatically or mechanically replace every “သည်” with “၏”.
-- CHAPTER-LEVEL VALIDATION REQUIREMENT: This chapter must contain at least 13 narration sentences ending with “၏”. This chunk's assigned minimum is ${yaTarget}. Meet the assigned minimum with grammatical narration sentences; dialogue and possessive “၏” inside a sentence do not count.
+- CHAPTER-LEVEL VALIDATION REQUIREMENT: This chapter must contain at least 13 narration sentences ending with “၏”. The complete chapter's minimum is ${yaTarget}. Meet the assigned minimum with grammatical narration sentences; dialogue and possessive “၏” inside a sentence do not count.
 - Count a sentence-final “၏” when it is followed by Myanmar/English sentence punctuation, a line break, or the end of the chunk. Do not treat a possessive marker followed by more words as sentence-final.
 - Keep sentence endings varied and natural while meeting the assigned minimum; do not put “၏” at the end of every sentence.
 - Keep dialogue endings natural to the speaker; do not impose the narration's “၏” style on spoken dialogue.
@@ -194,7 +174,7 @@ NOVEL STYLE REFERENCE:
 ${novelStyle}
 Treat this as guidance for voice and literary tone only. It must never override story fidelity, exact character-name preservation, or the glossary.
 
-PREVIOUS CHUNK CONTEXT — CONTINUITY ONLY:
+CONTINUITY CONTEXT — REFERENCE ONLY:
 ${previousContext}
 Use this only to maintain continuity of names, tone, and sentence flow. Do not repeat it or include it in the output.
 
@@ -203,7 +183,7 @@ FINAL SELF-CHECK:
 2. Every character name is preserved exactly as it appears in the input.
 3. No fabricated Burmese words, meaningless compounds, literal calques, or unnatural AI-like expressions; use established Burmese vocabulary, a clear Burmese description, or accurate Myanmar-script transliteration where needed.
 4. Inner thoughts use single quotation marks, never asterisks.
-5. The chunk contains at least ${yaTarget} narration sentences ending with sentence-final “၏”.
+5. The complete chapter contains at least ${yaTarget} narration sentences ending with sentence-final “၏”.
 6. No foreign-script words remain, except exact character names preserved from the input.
 7. No story detail, name, relationship, action, or intention has been added, lost, or changed.
 8. No technical placeholder or token is added to the output.
@@ -214,47 +194,6 @@ Return ONLY the polished Myanmar text. No preface, labels, notes, or explanation
 INPUT:
 ${source}`}
 
-function splitPolishText(text,maxChars=6000){
- const paragraphs=String(text||'').replace(/\r/g,'').split(/\n\s*\n/);
- const chunks=[];let current='';
- const flush=()=>{if(current.trim())chunks.push(current.trim());current='';};
- for(const paragraph of paragraphs){
-  const value=paragraph.trim();if(!value)continue;
-  const candidate=current?current+'\n\n'+value:value;
-  if(candidate.length<=maxChars){current=candidate;continue;}
-  flush();
-  if(value.length<=maxChars){current=value;continue;}
-  const sentences=value.match(/[^။!?]+[။!?]?/g)||[value];
-  let piece='';
-  for(const sentence of sentences){
-   const part=sentence.trim();if(!part)continue;
-   if(part.length>maxChars){
-    if(piece){current=piece;flush();piece='';}
-    let offset=0;
-    while(offset<part.length){
-     let end=Math.min(offset+maxChars,part.length);
-     const tokenStart=part.lastIndexOf('[[NAMELOCK_',end);
-     if(tokenStart>=offset&&tokenStart<end){
-      const tokenEnd=part.indexOf(']]',tokenStart);
-      if(tokenEnd>=end)end=tokenStart;
-     }
-     if(end<=offset)end=Math.min(offset+maxChars,part.length);
-     const fragment=part.slice(offset,end).trim();
-     if(fragment){current=fragment;flush();}
-     offset=end;
-    }
-   }else if((piece?piece+' '+part:part).length<=maxChars){
-    piece=piece?piece+' '+part:part;
-   }else{
-    if(piece){current=piece;flush();}
-    piece=part;
-   }
-  }
-  if(piece){current=piece;flush();}
- }
- flush();
- return chunks;
-}
 async function getGlossary(novelId){const rows=await q(supabase.from('glossary_terms').select('*').eq('novel_id',novelId).order('created_at'));const g={characters:[],items:[],locations:[],organizations:[],skills:[],other:[]};for(const r of rows)(g[r.type]??g.other).push(r);return g}
 function validateGlossaryObject(x){return x&&typeof x==='object'&&['characters','items','organizations','locations','skills','other'].every(k=>Array.isArray(x[k]))}
 function validateLockedOutput(text,locks,expectedCounts){for(const x of locks){const expected=expectedCounts.get(x.token);if(expected===undefined)continue;const actual=countToken(text,x.token);if(actual!==expected)return false}return true}
@@ -288,21 +227,24 @@ function validatePolishOutput(text,source,finishReasons=[],options={}){
  if(asterisks)issues.push('asterisk thought/formatting markers remain: '+asterisks+'; replace inner-thought *...* markers with single quotation marks and remove all asterisks');
  return issues;
 }
-function polishValidationRetryPrompt(currentDraft,issues,novelStyle='',previousContext='',originalSource='',yaTarget=0){
+function polishValidationRetryPrompt(currentDraft,issues,novelStyle='',previousContext='',originalSource='',yaTarget=13){
  const source=String(originalSource||currentDraft||''),draft=String(currentDraft||'');
  const p=polishPrompt(source,true,novelStyle,previousContext,yaTarget),anchor='Return ONLY the polished Myanmar text. No preface, labels, notes, or explanation.';
- if(!p.includes(anchor))throw new Error('Could not construct Polish validation retry prompt.');
+ if(!p.includes(anchor))throw new Error('Could not construct Phase 2 corrective prompt.');
  const rules=[
-  'This is corrective pass editing. The CURRENT PHASE 2 DRAFT below is the text to repair; use the ORIGINAL INPUT as the source of truth for any omitted story information.',
-  'Fix every listed validation issue in this pass. Do not merely explain the issue or repeat the unchanged draft.',
-  'Keep all valid literary edits from the current draft. Preserve every story fact, event, action, thought, emotion, relationship, and dialogue meaning.',
-  'Preserve every character name exactly as it appears in the original input. Never translate, transliterate, respell, normalize, or otherwise edit a character name.',
-  'Meet the assigned sentence-final “၏” minimum with grammatical narration sentences. Do not count possessive markers or dialogue.',
-  'Convert all foreign-language words to Myanmar script, except exact character names preserved from the original input.',
-  'Replace every asterisk used for inner thoughts with single quotation marks. Do not use * as a thought marker or formatting symbol.',
-  'Do not shorten, summarize, omit, or replace the chunk with a partial answer. Return the complete corrected chunk.'
+  'THIS IS THE ONLY CORRECTIVE PASS. Deliver a complete, publication-ready final version of the ENTIRE chapter now.',
+  'Treat the CURRENT PHASE 2 DRAFT as the working manuscript. Preserve all good edits already made, but do not protect any awkward, incorrect, repetitive, or machine-like sentence.',
+  'Use the ORIGINAL INPUT as the definitive source of story facts. Compare it against the entire current draft and restore any omitted details without adding anything unsupported.',
+  'Fix EVERY validation issue listed below in this single pass. Do not leave any listed issue for a later pass, and do not merely explain or acknowledge an issue.',
+  'Perform a full-chapter editorial sweep: inspect every paragraph and sentence for unnatural Burmese syntax, literal translation patterns, awkward particles, repeated wording, weak verbs, inconsistent voice, and poor sentence rhythm. Rewrite weak passages decisively while preserving exact meaning.',
+  'Preserve every character name exactly as it appears in the original input. Never translate, transliterate, respell, normalize, shorten, expand, or otherwise alter a character name.',
+  'Meet the complete chapter sentence-final “၏” minimum with grammatically correct narration sentences. Never force “၏” into dialogue or use it as a possessive marker to satisfy the count.',
+  'Convert all foreign-script words to accurate natural Myanmar-script wording or transliteration, except exact character names that must remain unchanged.',
+  'Replace every asterisk used as an inner-thought or formatting marker with single quotation marks. Remove all stray asterisks.',
+  'Keep the complete chapter from its first sentence to its final sentence. Do not summarize, shorten, omit, duplicate, add headings, or return a partial answer.',
+  'Before responding, silently check the entire final chapter against every listed validation issue and every rule above. Return only the corrected chapter.'
  ];
- const corrective='CORRECTIVE PASS — REQUIRED FIXES:\\n- '+rules.join('\\n- ')+'\\nVALIDATION ISSUES TO FIX: '+issues.join('; ')+'\\n\\nCURRENT PHASE 2 DRAFT TO CORRECT (preserve its valid edits):\\n'+draft+'\\n\\nORIGINAL INPUT (story-fidelity reference):\\n'+source+'\\n';
+ const corrective='ONE FINAL CORRECTIVE PASS — COMPLETE CHAPTER REPAIR:\n- '+rules.join('\n- ')+'\n\nVALIDATION ISSUES THAT MUST ALL BE FIXED:\n- '+issues.join('\n- ')+'\n\nCURRENT PHASE 2 DRAFT — WORKING MANUSCRIPT:\n'+draft+'\n\nORIGINAL PHASE 1 INPUT — STORY FIDELITY SOURCE:\n'+source+'\n';
  return p.replace(anchor,corrective+anchor);
 }
 
@@ -383,34 +325,23 @@ app.post('/api/fetch-chapter',async(req,res)=>{try{const {url}=req.body;if(!url?
 
 app.post('/api/translate',async(req,res)=>{try{
  const {novelId,episodeId,source}=req.body;
- if(!novelId||!source?.trim())return res.status(400).json({error:'Novel and source are required'});
+ if(!novelId||!String(source||'').trim())return res.status(400).json({error:'Novel and source are required'});
  const novel=await q(supabase.from('novels').select('*').eq('id',novelId).single());
  const allGlossary=await getGlossary(novelId),glossary=filterGlossaryToSource(allGlossary,source),locks=buildNameLocks(glossary);
- let activeModel=MODELS[0],chunks=splitText(source,TRANSLATE_CHUNK_SIZE),result='',modelUsed=activeModel,neutralFallbackChunks=0;
- for(let i=0;i<chunks.length;i++){
-  const chunk=chunks[i],previousSource=chunks[i-1]?chunks[i-1].slice(-CONTEXT_OVERLAP):'',lockedChunk=lockText(chunk,locks),lockedPreviousSource=lockText(previousSource,locks);
-  const expected=new Map();for(const item of locks)expected.set(item.token,countToken(lockedChunk,item.token));
-  try{
-   const prompt=masterPrompt({style:novel.style,glossary,locks,source:lockedChunk,previousTail:result.slice(-5000),sourceContext:lockedPreviousSource});
-   const r=await generateWithRetries(aiTranslate,prompt,activeModel);
-   if(validateLockedOutput(r.text,locks,expected)){
-    result+=(result?'\\n\\n':'')+restoreNameLocks(r.text.trim(),locks);modelUsed=r.model;
-   }else{
-    console.warn('PHASE 1 NameLock mismatch in chunk '+(i+1)+'; retrying with neutral translation and no NameLock tokens.');
-    const neutralPrompt=masterPrompt({style:novel.style,glossary,locks:[],source:chunk,previousTail:result.slice(-5000),sourceContext:previousSource});
-    const neutral=await generateWithRetries(aiTranslate,neutralPrompt,activeModel);
-    result+=(result?'\\n\\n':'')+neutral.text.trim();modelUsed=neutral.model;neutralFallbackChunks++;
-   }
-  }catch(e){
-   if(!retryable(e))throw e;
-   if(activeModel===MODELS[0]){activeModel=MODELS[1];const remaining=chunks.slice(i).join('\\n\\n');chunks=chunks.slice(0,i).concat(splitText(remaining,TRANSLATE_CHUNK_SIZE));i--;continue}
-   throw e;
-  }
- }
- if(episodeId)await q(supabase.from('episodes').update({source,translation:result,model:modelUsed,status:'translated',updated_at:new Date().toISOString()}).eq('id',episodeId).eq('novel_id',novelId));
- res.json({translation:result,model:modelUsed,sourceChars:countChars(source),pass1Chars:countChars(result),nameLockNeutralFallback:neutralFallbackChunks>0,neutralFallbackChunks});
+ const lockedSource=lockText(source,locks),expected=new Map();
+ for(const item of locks)expected.set(item.token,countToken(lockedSource,item.token));
+ let result=await runTwoModelTask(aiTranslate,masterPrompt({style:novel.style,glossary,locks,source:lockedSource,previousTail:'',sourceContext:''}),'TRANSLATE');
+ let output=String(result.text||'').trim(),nameLockFallback=false;
+ if(!validateLockedOutput(output,locks,expected)){
+  console.warn('PHASE 1: NameLock validation failed on the complete chapter; retrying once without NameLock.');
+  result=await runTwoModelTask(aiTranslate,masterPrompt({style:novel.style,glossary,locks:[],source,previousTail:'',sourceContext:''}),'TRANSLATE_NO_NAMELOCK');
+  output=String(result.text||'').trim();
+  nameLockFallback=true;
+ }else output=restoreNameLocks(output,locks);
+ if(!output)throw new Error('Phase 1 returned an empty full-chapter translation.');
+ if(episodeId)await q(supabase.from('episodes').update({source,translation:output,model:result.model,status:'translated',updated_at:new Date().toISOString()}).eq('id',episodeId).eq('novel_id',novelId));
+ res.json({translation:output,model:result.model,sourceChars:countChars(source),pass1Chars:countChars(output),nameLockNeutralFallback:nameLockFallback,neutralFallbackChunks:nameLockFallback?1:0});
 }catch(e){fail(res,e)}});
-
 function parseGlossaryJson(text){const raw=String(text||'').trim().replace(/^\uFEFF/,'').replace(/^\`\`\`(?:json)?\s*/i,'').replace(/\s*\`\`\`$/,'').trim();try{return JSON.parse(raw)}catch(firstError){const start=raw.indexOf('{');if(start<0)throw firstError;let depth=0,inString=false,escaped=false;for(let i=start;i<raw.length;i++){const ch=raw[i];if(inString){if(escaped)escaped=false;else if(ch==='\\')escaped=true;else if(ch==='"')inString=false;continue}if(ch==='"'){inString=true;continue}if(ch==='{')depth++;else if(ch==='}'&&--depth===0){const candidate=raw.slice(start,i+1);try{return JSON.parse(candidate)}catch{return JSON.parse(candidate.replace(/,\s*([}\]])/g,'$1'))}}}throw firstError}}
 app.post('/api/extract-glossary',async(req,res)=>{try{const {source}=req.body;if(!source?.trim())return res.status(400).json({error:'Source is required'});const r=await runTwoModelTask(aiGlossary,glossaryPrompt(source),'GLOSSARY');let data;try{data=parseGlossaryJson(r.text)}catch{throw new Error('Glossary AI returned invalid JSON. Please try again.')}if(!validateGlossaryObject(data))throw new Error('Glossary AI returned an invalid format.');res.json({glossary:data,model:r.model,sourceChars:countChars(source)})}catch(e){fail(res,e)}});
 function normalizeGlossaryKey(value){return String(value||'').normalize('NFKC').replace(/[“”"'’]/g,'').replace(/\s+/g,' ').trim().toLowerCase()}
@@ -456,7 +387,7 @@ app.post('/api/auto-glossary',async(req,res)=>{try{const {novelId,chapterNo,sour
 
 app.post('/api/polish',async(req,res)=>{try{
  const {novelId,episodeId,translation}=req.body;
- if(!novelId||!translation?.trim())return res.status(400).json({error:'Novel and translation are required'});
+ if(!novelId||!String(translation||'').trim())return res.status(400).json({error:'Novel and translation are required'});
  const novel=await q(supabase.from('novels').select('style').eq('id',novelId).single());
  let episodeSource='';
  if(episodeId){const ep=await q(supabase.from('episodes').select('source').eq('id',episodeId).eq('novel_id',novelId).single());episodeSource=ep?.source||''}
@@ -466,34 +397,29 @@ app.post('/api/polish',async(req,res)=>{try{
   const original=String(item.original||'').trim(),translated=String(item.translation||'').trim();
   if(original&&translated)glossaryLines.push(type+': '+original+' => '+translated);
  }
- const glossaryNote='\\n\\nAUTHORITATIVE NAME / TERM GLOSSARY (reference for consistency only; never alter character names already present in the input):\\n'+(glossaryLines.join('\\n')||'(none)');
+ const glossaryNote='\n\nAUTHORITATIVE NAME / TERM GLOSSARY (reference for consistency only; never alter character names already present in the input):\n'+(glossaryLines.join('\n')||'(none)');
  const allowedNames=(glossary?.characters||[]).flatMap(x=>[x.original,x.translation]).map(x=>String(x||'').trim()).filter(Boolean);
- const novelStyle=String(novel?.style||'').trim(),chunks=splitPolishText(translation,6000),polishedChunks=[];
- const baseYa=Math.floor(13/chunks.length),extraYa=13%chunks.length;
- for(let index=0;index<chunks.length;index++){
-  const chunk=chunks[index],previousContext=index>0?polishedChunks[index-1].slice(-700):'',yaTarget=baseYa+(index<extraYa?1:0);
-  const prompt=polishPrompt(chunk,false,novelStyle,previousContext,yaTarget).replace('INPUT:',glossaryNote+'\\n\\nINPUT:');
-  let result=await runPolishTask(prompt,'POLISH-CHUNK-'+(index+1)+'/'+chunks.length),polished=String(result.text||'').trim();
-  if(!polished)throw new Error('Phase 2 returned an empty result for chunk '+(index+1)+'.');
-  let issues=validatePolishOutput(polished,chunk,result.finishReasons,{yaTarget,allowedNames}),correctionPass=0;
-  while(issues.length&&correctionPass<2){
-   correctionPass++;
-   console.warn('POLISH chunk '+(index+1)+' corrective pass '+correctionPass+'/2: '+issues.join('; '));
-   const retryBase=polishValidationRetryPrompt(polished,issues,novelStyle,previousContext,chunk,yaTarget);
-   const retryPrompt=retryBase.replace('INPUT:',glossaryNote+'\\n\\nINPUT:');
-   result=await runPolishTask(retryPrompt,'POLISH-CHUNK-RETRY-'+(index+1)+'-'+correctionPass+'/'+chunks.length);
-   const next=String(result.text||'').trim();if(next)polished=next;
-   issues=validatePolishOutput(polished,chunk,result.finishReasons,{yaTarget,allowedNames});
-  }
-  if(issues.length)console.warn('POLISH chunk '+(index+1)+' still has warnings after 2 corrective passes; accepting latest Phase 2 output: '+issues.join('; '));
-  polishedChunks.push(polished);
+ const novelStyle=String(novel?.style||'').trim(),yaTarget=13;
+ const prompt=polishPrompt(translation,false,novelStyle,'',yaTarget).replace('INPUT:',glossaryNote+'\n\nINPUT:');
+ let result=await runPolishTask(prompt,'POLISH-PASS-1');
+ let polished=String(result.text||'').trim();
+ if(!polished)throw new Error('Phase 2 returned an empty full-chapter result.');
+ let issues=validatePolishOutput(polished,translation,result.finishReasons,{yaTarget,allowedNames});
+ let correctivePasses=0;
+ if(issues.length){
+  correctivePasses=1;
+  console.warn('PHASE 2: running the single full-chapter corrective pass: '+issues.join('; '));
+  const retryPrompt=polishValidationRetryPrompt(polished,issues,novelStyle,'',translation,yaTarget).replace('INPUT:',glossaryNote+'\n\nINPUT:');
+  result=await runPolishTask(retryPrompt,'POLISH-CORRECTIVE-PASS-1');
+  const corrected=String(result.text||'').trim();
+  if(!corrected)throw new Error('Phase 2 corrective pass returned an empty full-chapter result.');
+  polished=corrected;
+  issues=validatePolishOutput(polished,translation,result.finishReasons,{yaTarget,allowedNames});
  }
- const polished=polishedChunks.join('\\n\\n').trim();if(!polished)throw new Error('Phase 2 returned an empty combined result.');
+ if(issues.length)console.warn('PHASE 2: remaining non-blocking validation warnings after the one corrective pass; accepting the complete latest output: '+issues.join('; '));
  if(episodeId)await q(supabase.from('episodes').update({translation:polished,updated_at:new Date().toISOString()}).eq('id',episodeId).eq('novel_id',novelId));
- const remainingWarnings=polishedChunks.flatMap((chunk,index)=>validatePolishOutput(chunk,chunks[index]||'',[],{yaTarget:baseYa+(index<extraYa?1:0),allowedNames}).map(issue=>'chunk '+(index+1)+': '+issue));
- res.json({translation:polished,model:'gemini-3.1-flash-lite / gemini-3.5-flash-lite',pass1Chars:countChars(translation),pass2Chars:countChars(polished),changed:normalizeForCompare(polished)!==normalizeForCompare(translation),validated:remainingWarnings.length===0,phase2OutputAccepted:true,polishFallback:false,validationWarnings:remainingWarnings,totalChunks:chunks.length,correctivePasses:2});
+ res.json({translation:polished,model:result.model,pass1Chars:countChars(translation),pass2Chars:countChars(polished),changed:normalizeForCompare(polished)!==normalizeForCompare(translation),validated:issues.length===0,phase2OutputAccepted:true,polishFallback:false,validationWarnings:issues,correctivePasses,totalChunks:1});
 }catch(e){console.error('POLISH failed:',e?.stack||e?.message||e);res.status(e?.status||502).json({error:String(e?.message||e),validated:false,polishFallback:false,phase2Failed:true})}});
-
 function slugify(value){return String(value||'novel').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Za-z0-9]+/g,'-').replace(/^-+|-+$/g,'').toLowerCase()||'novel'}
 function excelValue(value){return value==null?'':String(value)}
 async function fetchExportRows(table, columns, novelId, orderColumn, batchSize=25){
