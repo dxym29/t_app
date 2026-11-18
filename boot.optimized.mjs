@@ -32,21 +32,7 @@ source = source.replace(bootReadLine, bootReadLine+'\n'+`source=source.replace($
 // NameLock validation/recovery is maintained in boot.mjs itself. Do not patch
 // stale signatures here: boot.mjs builds the runtime from the current server source.
 
-// Website Excel export: allow an optional ?toChapter=N limit. Default remains
-// the whole novel when the field is blank.
-const workbookSignature=`async function buildTemplateWorkbook(novelId){`;
-const workbookSignaturePatched=`async function buildTemplateWorkbook(novelId,fromChapter=null,toChapter=null){`;
-if(source.includes(workbookSignature)){
-  source=source.replace(workbookSignature,workbookSignaturePatched);
-  const episodesLoad=`const episodes=(await q(supabase.from('episodes').select('*').eq('novel_id',novelId))).sort((a,b)=>Number(a.number)-Number(b.number));`;
-  const episodesLoadPatched=`let episodes=(await q(supabase.from('episodes').select('*').eq('novel_id',novelId))).sort((a,b)=>Number(a.number)-Number(b.number));\n  const chapterStart=Number(fromChapter),chapterEnd=Number(toChapter);\n  if(Number.isInteger(chapterStart)&&chapterStart>0)episodes=episodes.filter(e=>Number(e.number)>=chapterStart);\n  if(Number.isInteger(chapterEnd)&&chapterEnd>0)episodes=episodes.filter(e=>Number(e.number)<=chapterEnd);`;
-  if(!source.includes(episodesLoad))throw new Error('Excel episode query could not be patched safely.');
-  source=source.replace(episodesLoad,episodesLoadPatched);
-  const workbookCall='buildTemplateWorkbook(req.params.id)';
-  if(source.includes(workbookCall))source=source.replace(workbookCall,'buildTemplateWorkbook(req.params.id,req.query.fromChapter,req.query.toChapter)');
-}else{
-  console.warn('Excel workbook builder not found; existing export behavior preserved.');
-}
+// Excel export is maintained directly in server.mjs.
 
 await fs.writeFile(patchedPath, source, 'utf8');
 await import(pathToFileURL(patchedPath).href + `?optimized=${Date.now()}`);
