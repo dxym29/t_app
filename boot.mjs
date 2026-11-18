@@ -84,14 +84,6 @@ function lockText(text,locks){
   }
   return out;
 }
-function lockChunkWithUniqueTokens(text,locks){
-  let out=String(text||''),n=1;const used=[];
-  for(const item of [...locks].sort((a,b)=>b.original.length-a.original.length)){
-    const re=new RegExp('(^|[^\\\\p{L}\\\\p{N}])('+escapeNameRegex(item.original)+')(?=$|[^\\\\p{L}\\\\p{N}])','giu');
-    out=out.replace(re,(match,prefix)=>{const token='[[NAMELOCK_'+String(n++).padStart(3,'0')+']]';used.push({...item,token,matchedForm:item.original});return prefix+token});
-  }
-  return {text:out,locks:used};
-}
 function lockTranslationText(text,locks){let out=String(text||'');const ordered=[...locks].sort((a,b)=>b.translation.length-a.translation.length);for(const x of ordered)out=out.split(x.translation).join(x.token);return out}
 function findNameLockTokens(text){const re=new RegExp('\\\\[\\\\[NAMELOCK_([^\\\\]]+)\\\\]\\\\]','g');return [...String(text||'').matchAll(re)].map(m=>({raw:m[0],label:m[1]}))}
 function repairMissingNameLocksFromLiteralNames(text,locks){
