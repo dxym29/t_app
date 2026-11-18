@@ -8,12 +8,6 @@ const patchedPath = path.join(root, '.boot.optimized.runtime.mjs');
 
 let source = await fs.readFile(originalPath, 'utf8');
 
-// Keep translation chunks at 12,000 characters for both translation models.
-source = source.replaceAll('splitText(source,7000)', 'splitText(source,12000)');
-
-const oldServerChunkPatch = `const CHUNK_SIZES={'gemini-3.1-flash-lite':10000,'gemini-3.5-flash-lite':10000};\nconst TRANSLATE_CHUNK_SIZE=10000;`;
-const serverChunkPatch = `const CHUNK_SIZES={'gemini-3.1-flash-lite':12000,'gemini-3.5-flash-lite':12000};\nconst TRANSLATE_CHUNK_SIZE=12000;`;
-const serverPatchInjection = `source=source.replace(${JSON.stringify(oldServerChunkPatch)},${JSON.stringify(serverChunkPatch)});`;
 const bootReadLine = `let source=await fs.readFile(sourcePath,'utf8');`;
 if(!source.includes(bootReadLine))throw new Error('Could not locate boot.mjs source loader.');
 
@@ -33,7 +27,7 @@ async function cleanFetchedRawText(raw){
 `;
 const fetchMarker=`app.post('/api/fetch-chapter',async(req,res)=>{try{const {url}=req.body;if(!url?.trim())return res.status(400).json({error:'Chapter URL is required'});const result=await fetchNovelPingChapter(url.trim());res.json(result)}catch(e){fail(res,e)}});`;
 const cleanMarker=`app.post('/api/clean-chapter',async(req,res)=>{try{const {source}=req.body;if(!source?.trim())return res.status(400).json({error:'Source text is required'});const cleanedSource=await cleanFetchedRawText(String(source));res.json({source:cleanedSource,sourceChars:countChars(cleanedSource),rawSourceChars:countChars(String(source)),cleaned:true})}catch(e){fail(res,e)}});`;
-source = source.replace(bootReadLine, bootReadLine+'\n'+serverPatchInjection+'\n'+`source=source.replace(${JSON.stringify(fetchMarker)},${JSON.stringify(rawCleanHelper+'\n'+fetchMarker+'\n'+cleanMarker)});`);
+source = source.replace(bootReadLine, bootReadLine+'\n'+`source=source.replace(${JSON.stringify(fetchMarker)},${JSON.stringify(rawCleanHelper+'\n'+fetchMarker+'\n'+cleanMarker)});`);
 
 // NameLock validation/recovery is maintained in boot.mjs itself. Do not patch
 // stale signatures here: boot.mjs builds the runtime from the current server source.
