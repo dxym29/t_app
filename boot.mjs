@@ -137,7 +137,7 @@ source=source.replace(glossaryAnchor,glossaryWithChecklist);
 const translateStart=source.indexOf("app.post('/api/translate'");
 const translateEnd=source.indexOf('\nfunction parseGlossaryJson',translateStart);
 if(translateStart<0||translateEnd<0)throw new Error('Translate route could not be patched safely.');
-const translateReplacement=\`app.post('/api/translate',async(req,res)=>{try{
+const translateReplacement=`app.post('/api/translate',async(req,res)=>{try{
  const {novelId,episodeId,source}=req.body;
  if(!novelId||!String(source||'').trim())return res.status(400).json({error:'Novel and source are required'});
  const novel=await q(supabase.from('novels').select('*').eq('id',novelId).single());
@@ -169,7 +169,7 @@ const translateReplacement=\`app.post('/api/translate',async(req,res)=>{try{
  const message=String(e?.message||e);
  console.error('TRANSLATE: request failed:',e?.stack||message);
  fail(res,e);
-}});\`
+}});`
 
 source=source.slice(0,translateStart)+translateReplacement+source.slice(translateEnd);
 
