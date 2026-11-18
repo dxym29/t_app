@@ -11,21 +11,13 @@
   async function getFullEpisode(id){return await api(`/api/episodes/${currentNovel.id}/${id}`)}
   async function saveBatchEpisode(e,translation){const saved=await api(`/api/episodes/${currentNovel.id}/${e.id}`,{method:'PUT',body:JSON.stringify({number:Number(e.number),title:e.title||'',source:e.source||'',translation,status:'translated'})});updateEpisodeMeta(saved);currentEpisode=saved;return saved}
   async function runUntilSuccess(label,phase,fn){
-    let attempt=0;
-    while(true){
-      attempt++;
-      try{return await fn()}
-      catch(error){
-        const message=String(error?.message||error);
-        if(/PROHIBITED_CONTENT|prompt.?block|safety.?block/i.test(message)){
-          const note=label+' • '+phase+' blocked by Gemini PROHIBITED_CONTENT; skipping this chapter without retry.';
-          $('batchStatus').textContent=note;setStatus(note,false);throw error;
-        }
-        if(isQuotaError(error))throw error;
-        $('batchStatus').textContent=label+' • '+phase+' error (attempt '+attempt+') • retrying in 3s...';
-        setStatus(label+' • '+phase+' failed; retry '+attempt+'...',false);
-        await sleep(3000);
-      }
+    try{return await fn()}
+    catch(error){
+      const message=String(error?.message||error);
+      const note=label+' • '+phase+' failed after 4 model attempts: '+message;
+      $('batchStatus').textContent=note;
+      setStatus(note,false);
+      throw error;
     }
   }
   async function translateUntilNonEmpty(label,e){
@@ -65,7 +57,7 @@
     const missingText=skippedMissing.length?'\n\nMissing chapter records: '+skippedMissing.join(', ')+'.':'';
     const modeText=allUntranslated?'ALL-UNTRANSLATED mode: every chapter in this novel without a saved translation will be processed.':(onlyUntranslated?'UNTRANSLATED-ONLY mode: chapters already translated will be left untouched.':'Current mode: run every existing chapter in the selected range.');
     const noRawText=skippedNoRaw.length?'\nChapters without Raw source skipped: '+skippedNoRaw.join(', ')+'.':'';
-    if(!confirm('Run '+chapters.length+' '+(onlyUntranslated?'untranslated ':'')+'chapters: #'+chapters[0].number+'–#'+chapters[chapters.length-1].number+(allUntranslated?' (entire novel)':'')+'?\n'+modeText+missingText+noRawText+'\n\n1. English-to-English polish / cleanup\n2. Auto Glossary extraction + database add (names/entities only)\n3. English-to-Myanmar translation\n4. Myanmar-to-Myanmar polish / retry validation up to 5 corrective passes; if validation still fails after all 5, save the Phase 1 translation as a reported fallback\n\nGlossary limits: max 30 through chapter 100; 25 additional through chapter 200; 70 total per novel. Existing/duplicate terms are skipped. dao → တာအို and cultivation → ကျင့်ကြံခြင်း are fixed global terms. Translation uses 10,000-character chunks when needed. Quota and PROHIBITED_CONTENT skip the chapter. Other translation errors retry the same model every 3 seconds until success, using the configured fallback sequence. If Phase 2 validation still fails after 5 corrective passes, save Pass 1 as a fallback and report it; Phase 2 API/quota errors do not trigger this fallback. Empty source is skipped automatically.'))return;
+    if(!confirm('Run '+chapters.length+' '+(onlyUntranslated?'untranslated ':'')+'chapters: #'+chapters[0].number+'–#'+chapters[chapters.length-1].number+(allUntranslated?' (entire novel)':'')+'?\n'+modeText+missingText+noRawText+'\n\n1. English-to-English polish / cleanup\n2. Auto Glossary extraction + database add (names/entities only)\n3. English-to-Myanmar translation\n4. Myanmar-to-Myanmar polish / run one strong full-chapter corrective pass if validation finds issues\n\nGlossary limits: max 30 through chapter 100; 25 additional through chapter 200; 70 total per novel. Existing/duplicate terms are skipped. dao → တာအို and cultivation → ကျင့်ကြံခြင်း are fixed global terms. Phase 1 and Phase 2 process the complete chapter in one request (no chunking). Every AI task tries 3.1 Flash Lite → 3.5 Flash Lite → 3.1 Flash Lite → 3.5 Flash Lite. If all four attempts fail, skip that chapter and continue. Phase 2 performs only one corrective pass when validation finds issues. Empty source is skipped automatically.'))return;
     const btn=$('batchBtn');const allBtn=$('batchAllUntranslatedBtn');btn.disabled=true;if(allBtn)allBtn.disabled=true;await requestNotifications();$('batchStatus').textContent=`Starting batch • ${chapters.length} chapters${skippedMissing.length?` • ${skippedMissing.length} missing skipped`:''}`;
     let autoStyleNotice='';
     try{
@@ -95,12 +87,9 @@
           if(!cleanedSource)throw new Error('English cleanup returned empty text.');
           $('batchStatus').textContent=label+' • English cleanup completed.';
         }catch(cleanError){
-          // Cleanup is optional: preserve the fetched source and keep the batch moving.
-          // The existing glossary and translation stages remain responsible for their own checks.
-          cleanedSource=rawSource;
-          console.warn(label+' • English cleanup failed; using original raw source:',String(cleanError?.message||cleanError));
-          $('batchStatus').textContent=label+' • cleanup unavailable • using original source...';
-          setStatus(label+' • cleanup unavailable; continuing with original source...',true);
+          console.warn(label+' • English cleanup failed after 4 model attempts; skipping chapter:',String(cleanError?.message||cleanError));
+          $('batchStatus').textContent=label+' • cleanup failed • skipping chapter...';
+          throw cleanError;
         }
         e.source=cleanedSource;
         $('source').value=cleanedSource;
@@ -108,7 +97,7 @@
         $('batchStatus').textContent=label+' • Auto Glossary extraction / database add...';
         const glossaryResult=await runUntilSuccess(label,'Auto Glossary',()=>api('/api/auto-glossary',{method:'POST',body:JSON.stringify({novelId:currentNovel.id,chapterNo:Number(e.number),source:cleanedSource})}));
         $('batchStatus').textContent=label+' • Glossary +'+Number(glossaryResult.added||0)+' ('+Number(glossaryResult.total||0)+'/'+Number(glossaryResult.limit||70)+')';
-        $('batchStatus').textContent=`${label} • Phase 1 Translate (10,000-character chunks when needed)...`;
+        $('batchStatus').textContent=`${label} • Phase 1 Translate (complete chapter)...`;
         let p1;
         try{p1=await translateUntilNonEmpty(label,e)}catch(translateError){
           const translateMessage=String(translateError?.message||translateError);
@@ -145,7 +134,7 @@
             updateStats();
           }
         }catch(polishError){
-          polishSkipped++;polishErrors.push(`#${e.number}: Phase 2 request/API failed; chapter NOT saved. ${polishError.message||'Polish failed'}`);
+          polishSkipped++;polishErrors.push(`#${e.number}: Phase 2 request failed after the configured model attempts; chapter NOT saved. ${polishError.message||'Polish failed'}`);
           $('polishedTranslation').value='';updateStats();
           $('batchStatus').textContent=`${label} • Phase 2 request failed • chapter not saved; continuing...`;
           throw polishError;
