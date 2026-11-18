@@ -324,7 +324,7 @@ app.delete('/api/episodes/:novelId/:id',async(req,res)=>{try{await q(supabase.fr
 app.post('/api/fetch-chapter',async(req,res)=>{try{const {url}=req.body;if(!url?.trim())return res.status(400).json({error:'Chapter URL is required'});const result=await fetchNovelPingChapter(url.trim());res.json(result)}catch(e){fail(res,e)}});
 
 app.post('/api/translate',async(req,res)=>{try{
- const {novelId,episodeId,source}=req.body;
+ const {novelId,episodeId,source,deferSave=false}=req.body;
  if(!novelId||!String(source||'').trim())return res.status(400).json({error:'Novel and source are required'});
  const novel=await q(supabase.from('novels').select('*').eq('id',novelId).single());
  const allGlossary=await getGlossary(novelId),glossary=filterGlossaryToSource(allGlossary,source),locks=buildNameLocks(glossary);
@@ -339,7 +339,7 @@ app.post('/api/translate',async(req,res)=>{try{
   nameLockFallback=true;
  }else output=restoreNameLocks(output,locks);
  if(!output)throw new Error('Phase 1 returned an empty full-chapter translation.');
- if(episodeId)await q(supabase.from('episodes').update({source,translation:output,model:result.model,status:'translated',updated_at:new Date().toISOString()}).eq('id',episodeId).eq('novel_id',novelId));
+ if(episodeId&&!deferSave)await q(supabase.from('episodes').update({source,translation:output,model:result.model,status:'translated',updated_at:new Date().toISOString()}).eq('id',episodeId).eq('novel_id',novelId));
  res.json({translation:output,model:result.model,sourceChars:countChars(source),pass1Chars:countChars(output),nameLockNeutralFallback:nameLockFallback,neutralFallbackChunks:nameLockFallback?1:0});
 }catch(e){fail(res,e)}});
 function parseGlossaryJson(text){const raw=String(text||'').trim().replace(/^\uFEFF/,'').replace(/^\`\`\`(?:json)?\s*/i,'').replace(/\s*\`\`\`$/,'').trim();try{return JSON.parse(raw)}catch(firstError){const start=raw.indexOf('{');if(start<0)throw firstError;let depth=0,inString=false,escaped=false;for(let i=start;i<raw.length;i++){const ch=raw[i];if(inString){if(escaped)escaped=false;else if(ch==='\\')escaped=true;else if(ch==='"')inString=false;continue}if(ch==='"'){inString=true;continue}if(ch==='{')depth++;else if(ch==='}'&&--depth===0){const candidate=raw.slice(start,i+1);try{return JSON.parse(candidate)}catch{return JSON.parse(candidate.replace(/,\s*([}\]])/g,'$1'))}}}throw firstError}}
