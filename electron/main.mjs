@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, shell } from 'electron';
 import path from 'node:path';
+import fs from 'node:fs/promises';
 import dotenv from 'dotenv';
 import { setTimeout as delay } from 'node:timers/promises';
 
@@ -24,6 +25,14 @@ if (!app.requestSingleInstanceLock()) {
     // so this first desktop build is deliberately unpacked (asar: false).
     process.chdir(app.getAppPath());
     const envPath = path.join(app.getPath('userData'), '.env');
+    await fs.mkdir(path.dirname(envPath), { recursive: true });
+    try {
+      await fs.access(envPath);
+    } catch {
+      const templatePath = path.join(app.getAppPath(), 'electron', '.env.example');
+      const template = await fs.readFile(templatePath, 'utf8');
+      await fs.writeFile(envPath, template, { encoding: 'utf8', flag: 'wx' });
+    }
     dotenv.config({ path: envPath });
     process.env.PORT = String(PORT);
     process.env.HOST = '127.0.0.1';
