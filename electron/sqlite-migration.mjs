@@ -68,19 +68,47 @@ function valueFor(row, column) {
   return '';
 }
 
-async function fetchAllRows(supabase, table, order, pageSize) {
+async function fetchAllRows(supabase, table, columns, order, initialPageSize) {
   const rows = [];
-  for (let start = 0; ; start += pageSize) {
-    const { data, error } = await supabase
-      .from(table)
-      .select('*')
-      .order(order)
-      .range(start, start + pageSize - 1);
-    if (error) throw new Error('Supabase export failed for ' + table + ': ' + error.message);
-    const page = data || [];
+  let cursor = null;
+  let pageSize = Math.min(initialPageSize, 100);
+
+  while (true) {
+    let page;
+    while (!page) {
+      let query = supabase
+        .from(table)
+        .select(columns.join(', '))
+        .order(order, { ascending: true })
+        .limit(pageSize);
+
+      // Keyset pagination avoids increasingly expensive OFFSET scans on large
+      // tables and keeps each request bounded by the primary-key index.
+      if (cursor !== null) query = query.gt(order, cursor);
+
+      const { data, error } = await query;
+      if (error) {
+        const message = String(error.message || error);
+        const isTimeout = /statement timeout|canceling statement|timeout/i.test(message);
+        if (isTimeout && pageSize > 10) {
+          pageSize = Math.max(10, Math.floor(pageSize / 2));
+          continue;
+        }
+        throw new Error('Supabase export failed for ' + table + ' after reducing page size to ' + pageSize + ': ' + message);
+      }
+
+      page = data || [];
+      if (page.length && cursor !== null && String(page[0][order]) <= String(cursor)) {
+        throw new Error('Supabase export pagination did not advance for ' + table + '.');
+      }
+    }
+
+    if (!page.length) break;
     rows.push(...page);
+    cursor = page[page.length - 1][order];
     if (page.length < pageSize) break;
   }
+
   return rows;
 }
 
@@ -105,7 +133,7 @@ export async function migrateSupabaseSnapshot({ supabase, databasePath, pageSize
     // read therefore cannot leave a partially refreshed local snapshot.
     const snapshot = {};
     for (const [table, config] of Object.entries(TABLES)) {
-      snapshot[table] = await fetchAllRows(supabase, table, config.order, pageSize);
+      snapshot[table] = await fetchAllRows(supabase, table, config.columns, config.order, pageSize);
     }
 
     const counts = Object.fromEntries(
