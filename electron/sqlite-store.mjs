@@ -142,7 +142,7 @@ export function createSqliteStore(databasePath) {
       }
       const w = where();
       if (this.action === 'update') {
-        const entries = Object.entries(this.values || {});
+        const entries = Object.entries(this.values || {}).filter(([, value]) => value !== undefined);
         if (!entries.length) return [];
         const sql = 'UPDATE ' + quote(this.table) + ' SET ' + entries.map(([k]) => quote(k) + '=?').join(', ') + w.sql;
         const changed = db.prepare(sql).run(...entries.map(([,v]) => v), ...w.args);
