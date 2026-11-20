@@ -23,6 +23,8 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm install
+      - name: Check JavaScript syntax
+        run: node --check electron/main.mjs && node --check electron/sqlite-store.mjs && node --check electron/sqlite-migration.mjs && node --check server.mjs
       - name: Test SQLite database adapter
         run: node --test electron/sqlite-store.test.mjs
       - name: Build Windows installer
