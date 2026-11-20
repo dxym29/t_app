@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const PORT = 43127;
+app.setPath('userData', path.join(app.getPath('appData'), 'Webnovel Translator'));
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 let mainWindow;
 
