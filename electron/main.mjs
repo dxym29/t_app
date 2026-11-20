@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, shell } from 'electron';
 import path from 'node:path';
+import dotenv from 'dotenv';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const PORT = 43127;
@@ -21,10 +22,15 @@ if (!app.requestSingleInstanceLock()) {
     // The existing boot scripts generate runtime files beside the app source,
     // so this first desktop build is deliberately unpacked (asar: false).
     process.chdir(app.getAppPath());
+    const envPath = path.join(app.getPath('userData'), '.env');
+    dotenv.config({ path: envPath });
     process.env.PORT = String(PORT);
     process.env.HOST = '127.0.0.1';
 
     try {
+      if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY || !process.env.GEMINI_API_KEY) {
+        throw new Error('API/Database settings မတွေ့ပါ။ %APPDATA%\\Webnovel Translator\\.env ဖိုင်ထဲမှာ .env.example ထဲက variable များကို ဖြည့်ပေးပါ။');
+      }
       await import('../boot.optimized.mjs');
       let ready = false;
       for (let attempt = 0; attempt < 80; attempt++) {
