@@ -2,6 +2,10 @@ import { app, BrowserWindow, dialog, shell } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import dotenv from 'dotenv';
+import { DatabaseSync } from 'node:sqlite';
+import { createClient } from '@supabase/supabase-js';
+import { createSqliteStore } from './sqlite-store.mjs';
+import { migrateSupabaseSnapshot } from './sqlite-migration.mjs';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const PORT = 43127;
@@ -34,12 +38,30 @@ if (!app.requestSingleInstanceLock()) {
       await fs.writeFile(envPath, template, { encoding: 'utf8', flag: 'wx' });
     }
     dotenv.config({ path: envPath });
+    const databasePath = path.join(app.getPath('userData'), 'webnovel-translator.sqlite');
+    let migrationComplete = false;
+    try {
+      const checkDb = new DatabaseSync(databasePath);
+      try { migrationComplete = Boolean(checkDb.prepare("SELECT migration_key FROM app_migrations WHERE migration_key = ?").get('supabase-snapshot-v1')); } catch {}
+      checkDb.close();
+    } catch {}
+    if (!migrationComplete && process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      const remote = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+      const migrated = await migrateSupabaseSnapshot({ supabase: remote, databasePath });
+      console.log('Initial Supabase to SQLite migration verified:', migrated.counts);
+    } else if (!migrationComplete) {
+      const local = createSqliteStore(databasePath);
+      local.close();
+      console.log('Initialized an empty local SQLite database; no Supabase credentials were configured.');
+    }
+    process.env.DATABASE_MODE = 'sqlite';
+    process.env.SQLITE_DATABASE_PATH = databasePath;
     process.env.PORT = String(PORT);
     process.env.HOST = '127.0.0.1';
 
     try {
-      if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY || !process.env.GEMINI_API_KEY) {
-        throw new Error('API/Database settings မတွေ့ပါ။ %APPDATA%\\Webnovel Translator\\.env ဖိုင်ထဲမှာ .env.example ထဲက variable များကို ဖြည့်ပေးပါ။');
+      if (!process.env.GEMINI_API_KEY) {
+        throw new Error('Gemini API settings မတွေ့ပါ။ %APPDATA%\\Webnovel Translator\\.env ဖိုင်ထဲမှာ GEMINI_API_KEY ကို ဖြည့်ပေးပါ။');
       }
       await import('../boot.optimized.mjs');
       let ready = false;
