@@ -6,7 +6,7 @@
     "dev": "node --import ./gemini-safety.mjs --watch boot.optimized.mjs",
     "start": "node --import ./gemini-safety.mjs boot.optimized.mjs",
     "desktop": "electron .",
-    "desktop:dist": "electron-builder --win nsis"
+    "desktop:dist": "electron-builder --win nsis --publish never"
   },
   "dependencies": {
     "@google/genai": "^1.20.0",
