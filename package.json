@@ -4,7 +4,9 @@
   "type": "module",
   "scripts": {
     "dev": "node --import ./gemini-safety.mjs --watch boot.optimized.mjs",
-    "start": "node --import ./gemini-safety.mjs boot.optimized.mjs"
+    "start": "node --import ./gemini-safety.mjs boot.optimized.mjs",
+    "desktop": "electron .",
+    "desktop:dist": "electron-builder --win nsis"
   },
   "dependencies": {
     "@google/genai": "^1.20.0",
@@ -13,5 +15,43 @@
     "dotenv": "^16.4.7",
     "exceljs": "^4.4.0",
     "express": "^5.1.0"
+  },
+  "main": "electron/main.mjs",
+  "devDependencies": {
+    "electron": "^39.0.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.webnoveltranslator.desktop",
+    "productName": "Webnovel Translator",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "**/*",
+      "!dist/**",
+      "!.git/**",
+      "!.env",
+      "!.env.*",
+      "!node_modules/.cache/**"
+    ],
+    "asar": false,
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
   }
 }
