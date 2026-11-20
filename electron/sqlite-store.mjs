@@ -122,7 +122,7 @@ export function createSqliteStore(databasePath) {
         const rows = this.values.map(defaults);
         const keys = [...new Set(rows.flatMap(r => Object.keys(r)))];
         const conflictKeys = this.action === 'upsert' ? String(this.conflict || 'id').split(',').map(x => x.trim()) : ['id'];
-        const updateKeys = keys.filter(k => !conflictKeys.includes(k));
+        const updateKeys = keys.filter(k => !conflictKeys.includes(k) && !(this.action === 'upsert' && k === 'id'));
         const sql = 'INSERT ' + (this.action === 'upsert' ? '' : '') + 'INTO ' + quote(this.table) +
           ' (' + keys.map(quote).join(', ') + ') VALUES (' + keys.map(() => '?').join(', ') + ')' +
           (this.action === 'upsert' ? ' ON CONFLICT (' + conflictKeys.map(quote).join(', ') + ') ' +
