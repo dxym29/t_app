@@ -32,7 +32,6 @@
       "!dist/**",
       "!.git/**",
       "!.env",
-      "!.env.*",
       "!node_modules/.cache/**"
     ],
     "asar": false,
