@@ -130,7 +130,13 @@ export function createSqliteStore(databasePath) {
         transaction(() => { const stmt = db.prepare(sql); for (const row of rows) stmt.run(...keys.map(k => row[k] ?? null)); });
         if (!this.returning) return null;
         const ids = rows.map(r => r.id);
-        const found = db.prepare('SELECT * FROM ' + quote(this.table) + ' WHERE id IN (' + ids.map(() => '?').join(',') + ')').all(...ids).map(project);
+        const found = [];
+        for (let i = 0; i < rows.length; i++) {
+          const row = rows[i];
+          const condition = conflictKeys.map(k => quote(k) + ' = ?').join(' AND ');
+          const actual = db.prepare('SELECT * FROM ' + quote(this.table) + ' WHERE ' + condition).get(...conflictKeys.map(k => row[k]));
+          if (actual) found.push(project(actual));
+        }
         if (this.singleMode === 'single') { if (found.length !== 1) throw new Error('Expected exactly one row, received ' + found.length); return found[0]; }
         return found;
       }
