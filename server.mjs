@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import ExcelJS from 'exceljs';
 import { GoogleGenAI } from '@google/genai';
 import { createClient } from '@supabase/supabase-js';
+import { createSqliteStore } from './electron/sqlite-store.mjs';
 import { fetchNovelPingChapter } from './fetcher.mjs';
 
 const app=express();
@@ -20,7 +21,9 @@ const backupApiKeys=[
  process.env.GEMINI_BACKUP_API_KEY_3||process.env.GEMINI_FALLBACK_API_KEY_3
 ].map(x=>String(x||'').trim()).filter(Boolean);
 const backupAiClients=backupApiKeys.map(apiKey=>new GoogleGenAI({apiKey}));
-const supabase=createClient(process.env.SUPABASE_URL,process.env.SUPABASE_SERVICE_ROLE_KEY,{auth:{persistSession:false}});
+const supabase = process.env.DATABASE_MODE === 'sqlite'
+ ? createSqliteStore(process.env.SQLITE_DATABASE_PATH)
+ : createClient(process.env.SUPABASE_URL,process.env.SUPABASE_SERVICE_ROLE_KEY,{auth:{persistSession:false}});
 const MODELS=['gemini-3.1-flash-lite','gemini-3.5-flash-lite'];
 const MODEL_TIMEOUT=45000;
 
