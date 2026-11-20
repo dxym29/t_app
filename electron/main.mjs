@@ -38,6 +38,7 @@ if (!app.requestSingleInstanceLock()) {
       await fs.writeFile(envPath, template, { encoding: 'utf8', flag: 'wx' });
     }
     dotenv.config({ path: envPath });
+    try {
     const databasePath = path.join(app.getPath('userData'), 'webnovel-translator.sqlite');
     let migrationComplete = false;
     try {
@@ -59,7 +60,6 @@ if (!app.requestSingleInstanceLock()) {
     process.env.PORT = String(PORT);
     process.env.HOST = '127.0.0.1';
 
-    try {
       if (!process.env.GEMINI_API_KEY) {
         throw new Error('Gemini API settings မတွေ့ပါ။ %APPDATA%\\Webnovel Translator\\.env ဖိုင်ထဲမှာ GEMINI_API_KEY ကို ဖြည့်ပေးပါ။');
       }
