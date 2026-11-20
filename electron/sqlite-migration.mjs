@@ -5,7 +5,7 @@ import path from 'node:path';
 const TABLES = {
   novels: {
     columns: ['id', 'name', 'style', 'created_at', 'updated_at'],
-    order: 'created_at'
+    order: 'id'
   },
   episodes: {
     columns: ['id', 'novel_id', 'number', 'title', 'source', 'translation', 'model', 'status', 'created_at', 'updated_at'],
@@ -130,10 +130,19 @@ export async function migrateSupabaseSnapshot({ supabase, databasePath, pageSize
         }
       }
 
-      for (const [table, expected] of Object.entries(counts)) {
-        const actual = Number(db.prepare('SELECT COUNT(*) AS count FROM ' + table).get().count);
-        if (actual < expected) {
-          throw new Error('SQLite verification failed for ' + table + ': expected at least ' + expected + ', found ' + actual);
+      for (const [table, rows] of Object.entries(snapshot)) {
+        const expectedIds = rows.map(row => String(row.id));
+        const foundIds = new Set();
+        // Chunk IN clauses to stay below SQLite's bind-parameter limit.
+        for (let offset = 0; offset < expectedIds.length; offset += 500) {
+          const chunk = expectedIds.slice(offset, offset + 500);
+          if (!chunk.length) continue;
+          const placeholders = chunk.map(() => '?').join(', ');
+          const found = db.prepare('SELECT id FROM ' + table + ' WHERE id IN (' + placeholders + ')').all(...chunk);
+          for (const item of found) foundIds.add(String(item.id));
+        }
+        if (foundIds.size !== expectedIds.length) {
+          throw new Error('SQLite ID verification failed for ' + table + ': expected ' + expectedIds.length + ', found ' + foundIds.size);
         }
       }
 
