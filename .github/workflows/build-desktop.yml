@@ -23,6 +23,8 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm install
+      - name: Test SQLite database adapter
+        run: node --test electron/sqlite-store.test.mjs
       - name: Build Windows installer
         run: npm run desktop:dist
       - name: Upload installer
