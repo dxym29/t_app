@@ -38,7 +38,7 @@
 
   <section class="card"><div id="status"></div></section>
   <section class="glossaryLayout"><section class="card glossaryPanel"><h2>AI #2 — Important Glossary</h2><p class="muted">Not saved automatically • only important / potentially recurring entities</p><div id="extractedGlossary" class="muted">No extraction yet.</div></section><section class="card glossaryPanel"><h2>Database Glossary / Character Voice</h2><div class="grid"><select id="termType"><option value="characters">Character</option><option value="items">Item</option><option value="locations">Location</option><option value="organizations">Organization</option><option value="skills">Skill</option><option value="other">Other</option></select><input id="termOriginal" placeholder="Original"><input id="termTranslation" placeholder="Established Myanmar name"><input id="termNote" placeholder="Note"><input id="termVoice" placeholder="Character voice (optional)"></div><button id="addTermBtn">Add / Update</button><div id="glossary"></div></section></section>
-  <section class="card"><h2>Website Export / Backup</h2><p class="muted">Export the selected novel as the exact MM Novel workbook format. Choose a starting and ending chapter to export only that range. Leave both blank to export the whole novel. The workbook template and its columns remain unchanged. JSON backup remains available for database moves.</p><div class="row"><label>From chapter <input id="exportFromChapter" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="e.g. 100"></label><label>To chapter <input id="exportToChapter" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="e.g. 200"></label><button id="exportTemplateBtn" class="primary">Export Website Excel</button><button id="exportNovelBtn">Export JSON Backup</button><button id="exportAllBtn">Export All JSON</button><label class="fileBtn">Import Backup<input id="importFile" type="file" accept=".json" hidden></label></div></section>
+  <section class="card"><h2>Website Export / Backup</h2><p class="muted">Export the selected novel as the exact MM Novel workbook format. Choose a starting and ending chapter to export only that range. Leave both blank to export the whole novel. The workbook template and its columns remain unchanged. JSON backup remains available for database moves.</p><div class="row"><label>From chapter <input id="exportFromChapter" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="e.g. 100"></label><label>To chapter <input id="exportToChapter" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="e.g. 200"></label><label>Specific chapters <input id="exportChapters" type="text" autocomplete="off" placeholder="e.g. 1,3,5-8"></label><button id="exportTemplateBtn" class="primary">Export Website Excel</button><button id="exportNovelBtn">Export JSON Backup</button><button id="exportAllBtn">Export All JSON</button><label class="fileBtn">Import Backup<input id="importFile" type="file" accept=".json" hidden></label></div></section>
   <section class="card"><h2>Chapter Finder</h2><p class="muted">Raw သို့မဟုတ် Translation ကိုရွေးပြီး ရှိ/မရှိအလိုက် Chapter တွေကို စစ်နိုင်ပါတယ်။ ရလဒ်ကိုနှိပ်ရင် သက်ဆိုင်ရာ Chapter ကိုဖွင့်ပေးပါမယ်။</p><div class="row"><label class="grow">အမျိုးအစား <select id="outputStatusField"><option value="raw">Raw</option><option value="translation">Translation</option></select></label><label class="grow">အခြေအနေ <select id="outputStatusState"><option value="missing">မရှိ</option><option value="exists">ရှိ</option></select></label></div><div id="outputStatusTable" class="muted">Loading...</div></section><section class="card"><h2>Episodes</h2><div id="episodes"></div></section>
 </main>
 <script src="/app.js?v=20261124-1"></script>
@@ -55,11 +55,14 @@
     if(!novelId)return alert('Select a novel first.');
     const from=document.getElementById('exportFromChapter')?.value.trim()||'';
     const to=document.getElementById('exportToChapter')?.value.trim()||'';
+    const chapters=document.getElementById('exportChapters')?.value.trim()||'';
+    if(chapters && (from||to))return alert('Use either Specific chapters or From/To range, not both.');
+    if(chapters && !/^[0-9,\s-]+$/.test(chapters))return alert('Specific chapters: use numbers and ranges, e.g. 1,3,5-8.');
     if(from && (!/^\d+$/.test(from)||Number(from)<1))return alert('Enter a valid starting chapter.');
     if(to && (!/^\d+$/.test(to)||Number(to)<1))return alert('Enter a valid ending chapter.');
     if(from&&to&&Number(from)>Number(to))return alert('Starting chapter must not be greater than ending chapter.');
     try{
-      const params=new URLSearchParams();if(from)params.set('fromChapter',from);if(to)params.set('toChapter',to);params.set('_',String(Date.now()));
+      const params=new URLSearchParams();if(from)params.set('fromChapter',from);if(to)params.set('toChapter',to);if(chapters)params.set('chapters',chapters);params.set('_',String(Date.now()));
       const query='?'+params.toString();
       const r=await fetch(`/api/export/template/${encodeURIComponent(novelId)}${query}`,{cache:'no-store'});
       if(!r.ok){const j=await r.json().catch(()=>({}));throw new Error(j.error||'Excel export failed')}
@@ -70,7 +73,7 @@
       const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=filename;document.body.appendChild(a);a.click();a.remove();
       setTimeout(()=>URL.revokeObjectURL(a.href),1000);
       const n=document.getElementById('saveNotice');
-      if(n){n.textContent='✓ '+(from||to?`Website Excel exported for Chapters ${from||'first'}–${to||'last'}`:'Website Excel exported successfully');n.style.opacity='1';clearTimeout(n._timer);n._timer=setTimeout(()=>n.style.opacity='0',2200)}
+      if(n){n.textContent='✓ '+(from||to?`Website Excel exported for Chapters ${chapters||`${from||'first'}–${to||'last'}`}`:'Website Excel exported successfully');n.style.opacity='1';clearTimeout(n._timer);n._timer=setTimeout(()=>n.style.opacity='0',2200)}
     }catch(e){alert(e.message)}
   };
 })();
