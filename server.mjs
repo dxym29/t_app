@@ -452,6 +452,21 @@ app.post('/api/polish',async(req,res)=>{try{
 }catch(e){console.error('POLISH failed:',e?.stack||e?.message||e);res.status(e?.status||502).json({error:String(e?.message||e),validated:false,polishFallback:false,phase2Failed:true})}});
 function slugify(value){return String(value||'novel').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Za-z0-9]+/g,'-').replace(/^-+|-+$/g,'').toLowerCase()||'novel'}
 function excelValue(value){return value==null?'':String(value)}
+function parseChapterSelection(value){
+  if(value==null||String(value).trim()==='')return null;
+  const selected=new Set();
+  for(const part of String(value).split(',')){
+    const token=part.trim();
+    if(!token)throw new Error('Specific chapters must be comma-separated numbers or ranges, e.g. 1,3,5-8.');
+    const match=token.match(/^(\d+)(?:\s*-\s*(\d+))?$/);
+    if(!match)throw new Error('Invalid chapter selection: '+token+'. Use numbers or ranges such as 1,3,5-8.');
+    const first=Number(match[1]),last=Number(match[2]||match[1]);
+    if(first<1||last<first||last-first>499)throw new Error('Chapter ranges must be positive and cannot exceed 500 chapters each.');
+    for(let n=first;n<=last;n++)selected.add(n);
+    if(selected.size>500)throw new Error('You can export up to 500 selected chapters at a time.');
+  }
+  return [...selected].sort((a,b)=>a-b);
+}
 async function fetchExportRows(table, columns, novelId, orderColumn, batchSize=25){
   const rows=[];
   for(let start=0;;start+=batchSize){
@@ -461,64 +476,75 @@ async function fetchExportRows(table, columns, novelId, orderColumn, batchSize=2
   }
   return rows;
 }
-async function buildTemplateWorkbook(novelId,fromChapter=null,toChapter=null){
+async function buildTemplateWorkbook(novelId,fromChapter=null,toChapter=null,selectedChapters=null){
   const novel=await q(supabase.from('novels').select('id,name,style').eq('id',novelId).single());
-  const glossary=await fetchExportRows('glossary_terms','original,translation,type,note,voice',''+novelId,'created_at',100);
-  let episodes=await fetchExportRows('episodes','number,title,source,translation',''+novelId,'number',100);
+  let episodes=await fetchExportRows('episodes','number,title,translation',''+novelId,'number',100);
   episodes.sort((a,b)=>Number(a.number)-Number(b.number));
-  const from=Number(fromChapter),to=Number(toChapter);
-  if(Number.isInteger(from)&&from>0)episodes=episodes.filter(e=>Number(e.number)>=from);
-  if(Number.isInteger(to)&&to>0)episodes=episodes.filter(e=>Number(e.number)<=to);
-  if(Number.isInteger(from)&&from>0&&Number.isInteger(to)&&to>=from){
+  if(Array.isArray(selectedChapters)&&selectedChapters.length){
     const available=new Set(episodes.map(e=>Number(e.number)));
-    const missing=[];
-    for(let chapter=from;chapter<=to;chapter++)if(!available.has(chapter))missing.push(chapter);
-    if(missing.length){
-      const preview=missing.slice(0,30).join(', ')+(missing.length>30?' ... (+'+(missing.length-30)+' more)':'');
-      throw new Error('Excel export stopped: '+missing.length+' chapter record(s) are missing from the database in the selected range. Missing chapter(s): '+preview+'. No incomplete workbook was generated.');
+    const missing=selectedChapters.filter(n=>!available.has(n));
+    if(missing.length)throw new Error('Excel export stopped: selected chapter(s) not found: '+missing.join(', ')+'. No incomplete workbook was generated.');
+    const selected=new Set(selectedChapters);
+    episodes=episodes.filter(e=>selected.has(Number(e.number)));
+  }else{
+    const from=Number(fromChapter),to=Number(toChapter);
+    if(Number.isInteger(from)&&from>0)episodes=episodes.filter(e=>Number(e.number)>=from);
+    if(Number.isInteger(to)&&to>0)episodes=episodes.filter(e=>Number(e.number)<=to);
+    if(Number.isInteger(from)&&from>0&&Number.isInteger(to)&&to>=from){
+      const available=new Set(episodes.map(e=>Number(e.number)));
+      const missing=[];
+      for(let chapter=from;chapter<=to;chapter++)if(!available.has(chapter))missing.push(chapter);
+      if(missing.length){
+        const preview=missing.slice(0,30).join(', ')+(missing.length>30?' ... (+'+(missing.length-30)+' more)':'');
+        throw new Error('Excel export stopped: '+missing.length+' chapter record(s) are missing from the database in the selected range. Missing chapter(s): '+preview+'. No incomplete workbook was generated.');
+      }
     }
   }
   const wb=new ExcelJS.Workbook();
-  wb.creator='Webnovel Translator';
-  wb.created=new Date();
+  wb.creator='Webnovel Translator';wb.created=new Date();
   const headerFill={type:'pattern',pattern:'solid',fgColor:{argb:'FF4338CA'}};
   const headerFont={bold:true,color:{argb:'FFFFFFFF'}};
   const guide=wb.addWorksheet('Guide');
   guide.addRow(['MM Novel workbook','Guidance']);
   guide.addRow(['Novel sheet','Keep the field/value columns. Add one value per field. Slug must use Latin letters. Existing genre names may be separated with |.']);
-  guide.addRow(['Chapters sheet','One chapter per row. Keep chapterNo unique. Enter sourceContent, translatedContent, or both. Set publishImmediately to TRUE only when the Burmese translation is ready to publish.']);
-  guide.addRow(['Glossary sheet','One term per row. sourceTerm and translatedTerm are required; add character voice, cultivation level, realm, or notes in the other columns.']);
+  guide.addRow(['Chapters sheet','One chapter per row. Keep chapterNo unique. Put the Burmese chapter text in content. An empty title uses the chapter number. Set publishImmediately to TRUE to publish or FALSE to save a draft.']);
+  guide.addRow(['Existing drafts','An exported chapter with an empty content cell needs Burmese text before it can be imported.']);
+  guide.addRow(['Glossary sheet','Optional sheet. One term per row. sourceTerm and translatedTerm are required; add character voice, cultivation level, realm, or notes in the other columns.']);
   guide.addRow(['Import','Use .xlsx files. Keep all sheet names and column headers unchanged. Import creates a new novel; it will not overwrite an existing novel.']);
   guide.columns=[{width:25},{width:115}];
-  guide.views=[{state:'frozen',ySplit:1}];
-  guide.getRow(1).eachCell(c=>{c.fill=headerFill;c.font=headerFont;});
   guide.eachRow((row,n)=>{row.height=n===1?22:34;row.eachCell((cell,col)=>{cell.alignment={vertical:'top',wrapText:true};if(n>1&&col===1)cell.font={bold:true};});});
+  guide.getRow(1).eachCell(c=>{c.fill=headerFill;c.font=headerFont;});
   const ns=wb.addWorksheet('Novel');
   ns.addRow(['field','value']);
-  for(const row of [['title',excelValue(novel.name)],['slug',slugify(novel.name)],['originalTitle',''],['author',''],['description',''],['coverUrl',''],['sourceLanguage','zh'],['translationGenre','general'],['translationTone','natural'],['translationNamePolicy','consistent'],['translationInstructions',excelValue(novel.style)],['status','ONGOING'],['isPublished','false'],['genres','']])ns.addRow(row);
+  for(const row of [['title',excelValue(novel.name)],['slug',slugify(novel.name)],['originalTitle',''],['author',''],['description',''],['coverUrl',''],['status','ONGOING'],['isPublished','false'],['genres','']])ns.addRow(row);
   ns.columns=[{width:30},{width:70}];
-  ns.views=[{state:'frozen',ySplit:1}];
-  ns.autoFilter='A1:B1';
   const cs=wb.addWorksheet('Chapters');
-  cs.addRow(['chapterNo','title','sourceLanguage','sourceContent','translatedTitle','translatedContent','publishImmediately']);
-  for(const e of episodes)cs.addRow([Number(e.number),excelValue(e.title),'zh',excelValue(e.source),'',excelValue(e.translation),'FALSE']);
-  cs.columns=[{width:14},{width:28},{width:18},{width:72},{width:28},{width:72},{width:22}];
-  cs.views=[{state:'frozen',ySplit:1}];
-  cs.autoFilter='A1:G1';
-  const gs=wb.addWorksheet('Glossary');
-  gs.addRow(['sourceTerm','translatedTerm','termType','note','characterVoice']);
-  for(const x of glossary)gs.addRow([excelValue(x.original),excelValue(x.translation),excelValue(x.type),excelValue(x.note),excelValue(x.voice)]);
-  gs.columns=[{width:28},{width:32},{width:20},{width:48},{width:42}];
-  gs.views=[{state:'frozen',ySplit:1}];
-  gs.autoFilter='A1:E1';
-  for(const ws of [ns,cs,gs]){
+  cs.addRow(['chapterNo','title','content','publishImmediately']);
+  for(const e of episodes)cs.addRow([Number(e.number),excelValue(e.title),excelValue(e.translation),'FALSE']);
+  cs.columns=[{width:14},{width:32},{width:80},{width:22}];
+  for(const ws of [ns,cs]){
     ws.getRow(1).eachCell(cell=>{cell.fill=headerFill;cell.font=headerFont;cell.alignment={vertical:'center',wrapText:true};});
     ws.getRow(1).height=24;
     ws.eachRow((row,rowNumber)=>{if(rowNumber>1)row.eachCell(cell=>{cell.alignment={vertical:'top',wrapText:true};});});
   }
   return wb;
 }
-app.get('/api/export/template/:id',async(req,res)=>{try{const fromChapter=req.query.fromChapter??null,toChapter=req.query.toChapter??null;for(const v of [fromChapter,toChapter])if(v!==null&&(!/^\d+$/.test(String(v))||Number(v)<1))return res.status(400).json({error:'Chapter range must use positive whole numbers.'});if(fromChapter!==null&&toChapter!==null&&Number(fromChapter)>Number(toChapter))return res.status(400).json({error:'Starting chapter must not be greater than ending chapter.'});const wb=await buildTemplateWorkbook(req.params.id,fromChapter,toChapter);const buffer=await wb.xlsx.writeBuffer();const novel=await q(supabase.from('novels').select('name').eq('id',req.params.id).single());res.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');res.setHeader('Content-Disposition',`attachment; filename="${slugify(novel.name)}-mm-novel.xlsx"`);res.setHeader('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate');res.setHeader('Pragma','no-cache');res.setHeader('Expires','0');res.setHeader('X-Workbook-Export-Version','chapter-pagination-v3');res.send(Buffer.from(buffer))}catch(e){fail(res,e)}});
+app.get('/api/export/template/:id',async(req,res)=>{try{
+  const fromChapter=req.query.fromChapter??null,toChapter=req.query.toChapter??null;
+  for(const v of [fromChapter,toChapter])if(v!==null&&(!/^\d+$/.test(String(v))||Number(v)<1))return res.status(400).json({error:'Chapter range must use positive whole numbers.'});
+  if(fromChapter!==null&&toChapter!==null&&Number(fromChapter)>Number(toChapter))return res.status(400).json({error:'Starting chapter must not be greater than ending chapter.'});
+  const selectedChapters=parseChapterSelection(req.query.chapters);
+  if(selectedChapters&&(fromChapter!==null||toChapter!==null))return res.status(400).json({error:'Use either specific chapters or a From/To range, not both.'});
+  const wb=await buildTemplateWorkbook(req.params.id,fromChapter,toChapter,selectedChapters);
+  const buffer=await wb.xlsx.writeBuffer();
+  const novel=await q(supabase.from('novels').select('name').eq('id',req.params.id).single());
+  res.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition','attachment; filename="'+slugify(novel.name)+'-mm-novel.xlsx"');
+  res.setHeader('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma','no-cache');res.setHeader('Expires','0');
+  res.setHeader('X-Workbook-Export-Version','mm-novel-template-v4');
+  res.send(Buffer.from(buffer));
+}catch(e){fail(res,e)}});
 async function exportNovel(novelId){const novel=await q(supabase.from('novels').select('*').eq('id',novelId).single());const glossary=await q(supabase.from('glossary_terms').select('*').eq('novel_id',novelId));const episodes=await q(supabase.from('episodes').select('*').eq('novel_id',novelId).order('number'));return {version:2,exportedAt:new Date().toISOString(),novels:[novel],glossary,episodes}}
 app.get('/api/export/novel/:id',async(req,res)=>{try{res.setHeader('Content-Disposition','attachment; filename=novel-backup.json');res.json(await exportNovel(req.params.id))}catch(e){fail(res,e)}});
 app.get('/api/export/all',async(_,res)=>{try{const novels=await q(supabase.from('novels').select('*').order('created_at'));const glossary=await q(supabase.from('glossary_terms').select('*'));const episodes=await q(supabase.from('episodes').select('*').order('novel_id,number'));res.setHeader('Content-Disposition','attachment; filename=webnovel-backup.json');res.json({version:2,exportedAt:new Date().toISOString(),novels,glossary,episodes})}catch(e){fail(res,e)}});
