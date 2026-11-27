@@ -512,7 +512,7 @@ async function buildTemplateWorkbook(novelId,fromChapter=null,toChapter=null,sel
   guide.addRow(['Glossary sheet','Optional sheet. One term per row. sourceTerm and translatedTerm are required; add character voice, cultivation level, realm, or notes in the other columns.']);
   guide.addRow(['Import','Use .xlsx files. Keep all sheet names and column headers unchanged. Import creates a new novel; it will not overwrite an existing novel.']);
   guide.columns=[{width:25},{width:115}];
-  guide.eachRow((row,n)=>{row.height=n===1?22:34;row.eachCell((cell,col)=>{cell.alignment={vertical:'top',wrapText:true};if(n>1&&col===1)cell.font={bold:true};});});
+  guide.eachRow((row,n)=>{if(n>1)row.height=38;row.eachCell((cell,col)=>{if(col===2)cell.alignment={vertical:'top',wrapText:true};if(n>1&&col===1)cell.font={bold:true};});});
   guide.getRow(1).eachCell(c=>{c.fill=headerFill;c.font=headerFont;});
   const ns=wb.addWorksheet('Novel');
   ns.addRow(['field','value']);
@@ -524,7 +524,7 @@ async function buildTemplateWorkbook(novelId,fromChapter=null,toChapter=null,sel
   cs.columns=[{width:14},{width:32},{width:80},{width:22}];
   for(const ws of [ns,cs]){
     ws.getRow(1).eachCell(cell=>{cell.fill=headerFill;cell.font=headerFont;cell.alignment={vertical:'center',wrapText:true};});
-    ws.getRow(1).height=24;
+    ws.getRow(1).height=28;
     ws.eachRow((row,rowNumber)=>{if(rowNumber>1)row.eachCell(cell=>{cell.alignment={vertical:'top',wrapText:true};});});
   }
   return wb;
